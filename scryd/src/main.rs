@@ -2,6 +2,7 @@
 //! verbs (`add-account`, `reindex`, `search`) plus a hidden `serve`
 //! verb the systemd user unit invokes.
 
+mod config_writer;
 mod exit;
 mod output;
 mod uds_client;
@@ -83,7 +84,7 @@ fn main() {
         Verb::Serve => run_serve(),
         Verb::Reindex => run_reindex(),
         Verb::Search(args) => run_search(args),
-        Verb::AddAccount(_) => run_add_account_stub(),
+        Verb::AddAccount(args) => run_add_account(args),
     }
 }
 
@@ -217,8 +218,170 @@ fn build_search_url(args: &SearchArgs) -> String {
     url
 }
 
-fn run_add_account_stub() {
-    // Filled in by task 22.
-    eprintln!("scryd add-account: implementation lands in task 22");
-    std::process::exit(ExitCode::Error.into_raw());
+fn run_add_account(args: AddAccountArgs) {
+    use std::io::{BufRead, Read, Write};
+    use std::path::PathBuf;
+
+    let id_re = regex::Regex::new(r"^[a-z0-9_-]+$").expect("valid regex");
+
+    // Resolve fields from flags or interactive prompts.
+    let id = match args.account_id {
+        Some(s) => s,
+        None => prompt_required("account id"),
+    };
+    if !id_re.is_match(&id) {
+        bail(
+            ExitCode::BadInput,
+            "bad-input",
+            &format!("account id `{id}` must match ^[a-z0-9_-]+$"),
+        );
+    }
+
+    let host = args.host.unwrap_or_else(|| prompt_required("imap host"));
+    let port = args.port;
+    if port == 0 {
+        bail(ExitCode::BadInput, "bad-input", "port must be 1..=65535");
+    }
+    let user = args.user.unwrap_or_else(|| prompt_required("username"));
+
+    let password = if args.password_stdin {
+        let mut buf = String::new();
+        std::io::stdin().lock().read_to_string(&mut buf).unwrap_or(0);
+        buf.trim_end_matches(['\n', '\r']).to_string()
+    } else {
+        rpassword::prompt_password("app password: ").unwrap_or_default()
+    };
+    if password.is_empty() {
+        bail(ExitCode::BadInput, "bad-input", "password cannot be empty");
+    }
+
+    let folders = args.folders.unwrap_or_else(|| {
+        let raw = prompt_with_default("folders [INBOX]", "INBOX");
+        raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    });
+    if folders.is_empty() {
+        bail(ExitCode::BadInput, "bad-input", "at least one folder is required");
+    }
+
+    let entry = config_writer::AccountEntry {
+        id: id.clone(),
+        host,
+        port,
+        user,
+        password,
+        folders,
+    };
+
+    let config_path = match resolve_config_path() {
+        Ok(p) => p,
+        Err(msg) => bail(ExitCode::ConfigError, "config-error", &msg),
+    };
+
+    if let Err(e) = config_writer::upsert_account(&config_path, &entry) {
+        bail(e.exit_code(), "config-error", &e.to_string());
+    }
+
+    let display_path = pretty_home(&config_path);
+    println!("account '{id}' saved to {display_path}");
+
+    // Try to reconcile if the daemon is running. Daemon-not-running is
+    // expected during initial setup — print a hint and exit 0.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let client = match uds_client::UdsClient::from_env() {
+            Ok(c) => c,
+            Err(_) => {
+                println!("start the daemon: systemctl --user start scryd");
+                return;
+            }
+        };
+        match client.post("/internal/reconcile").await {
+            Ok(resp) if resp.status == 202 => {
+                println!("daemon reloaded; account is now syncing");
+            }
+            Ok(resp) => {
+                eprintln!(
+                    "scryd: daemon-rejected: status {} from /internal/reconcile",
+                    resp.status
+                );
+                std::process::exit(ExitCode::DaemonRejected.into_raw());
+            }
+            Err(uds_client::ClientError::DaemonNotRunning(_)) => {
+                println!("start the daemon: systemctl --user start scryd");
+            }
+            Err(e) => {
+                eprintln!("scryd: error: {e}");
+                std::process::exit(ExitCode::Error.into_raw());
+            }
+        }
+    });
+
+    let _ = std::path::PathBuf::new(); // silence unused-import for tests
+    let _: PathBuf = config_path;
+    let _: &mut dyn Write = &mut std::io::stdout();
+    let _: &mut dyn BufRead = &mut std::io::BufReader::new(std::io::empty());
+}
+
+fn prompt_required(label: &str) -> String {
+    use std::io::{BufRead, Write as _};
+    print!("{label}: ");
+    let _ = std::io::stdout().flush();
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    let _ = stdin.lock().read_line(&mut line);
+    let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
+    if trimmed.is_empty() {
+        bail(
+            ExitCode::BadInput,
+            "bad-input",
+            &format!("{label} cannot be empty"),
+        );
+    }
+    trimmed
+}
+
+fn prompt_with_default(label: &str, default: &str) -> String {
+    use std::io::{BufRead, Write as _};
+    print!("{label}: ");
+    let _ = std::io::stdout().flush();
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    let _ = stdin.lock().read_line(&mut line);
+    let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
+    if trimmed.is_empty() {
+        default.to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn resolve_config_path() -> Result<std::path::PathBuf, String> {
+    use std::path::PathBuf;
+    if let Ok(home) = std::env::var("XDG_CONFIG_HOME") {
+        if !home.is_empty() {
+            return Ok(PathBuf::from(home).join("scryd").join("config.toml"));
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return Ok(PathBuf::from(home)
+                .join(".config")
+                .join("scryd")
+                .join("config.toml"));
+        }
+    }
+    Err("XDG_CONFIG_HOME and HOME are both unset".to_string())
+}
+
+fn pretty_home(p: &std::path::Path) -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let s = p.display().to_string();
+        if let Some(rest) = s.strip_prefix(&home) {
+            return format!("~{rest}");
+        }
+    }
+    p.display().to_string()
 }
