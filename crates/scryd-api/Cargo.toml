@@ -18,6 +18,8 @@ nix = { version = "0.29", features = ["socket", "user"] }
 scryd-log = { path = "../scryd-log" }
 scryd-storage = { path = "../scryd-storage" }
 scryd-search = { path = "../scryd-search" }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+mime = "0.3"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "io-util"] }

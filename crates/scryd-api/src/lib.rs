@@ -7,7 +7,10 @@
 //! (`/sync`, `/internal/reindex`, `/internal/reconcile`) on top of this
 //! crate's scaffolding.
 
+pub mod dto;
+pub mod handlers;
 pub mod peercred;
+pub mod response;
 pub mod router;
 pub mod serve;
 pub mod socket;
