@@ -9,6 +9,7 @@ members = [
     "crates/scryd-imap",
     "crates/scryd-api",
     "crates/scryd-runtime",
+    "crates/scryd-fetch-weights",
     "scryd",
 ]
 
