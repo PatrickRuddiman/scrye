@@ -1,0 +1,37 @@
+//! Application state passed to every axum handler. Tasks 18–19 attach
+//! request handlers that close over this struct.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use scryd_search::{Indexer, Searcher};
+use scryd_storage::StorageHandle;
+use tokio::sync::Mutex;
+
+/// Active reindex marker. The daemon-wide [`AppState::reindex_lock`] holds
+/// at most one of these at a time.
+#[derive(Debug)]
+pub struct ReindexHandle {
+    pub started_at: Instant,
+    pub messages_count: u64,
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub storage: StorageHandle,
+    pub searcher: Arc<Searcher>,
+    pub indexer: Arc<dyn Indexer>,
+    pub reindex_lock: Arc<Mutex<Option<ReindexHandle>>>,
+}
+
+impl AppState {
+    pub fn new(storage: StorageHandle, indexer: Arc<dyn Indexer>) -> Self {
+        let searcher = Arc::new(Searcher::new(indexer.clone()));
+        Self {
+            storage,
+            searcher,
+            indexer,
+            reindex_lock: Arc::new(Mutex::new(None)),
+        }
+    }
+}
