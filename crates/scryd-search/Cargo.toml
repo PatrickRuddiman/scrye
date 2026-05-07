@@ -4,3 +4,43 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 version.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+scryd-storage = { path = "../scryd-storage" }
+scryd-log = { path = "../scryd-log" }
+
+# dropbox/witchcraft is the production search-engine binding the
+# search-engine slice commits to. The dep is intentionally NOT declared
+# here yet:
+#
+#   - Witchcraft pins rusqlite 0.35 (libsqlite3-sys 0.33). scryd-storage
+#     pins rusqlite 0.31 (libsqlite3-sys 0.28). Cargo's `links = "sqlite3"`
+#     uniqueness rule rejects the dep graph even with witchcraft gated
+#     behind an optional feature flag.
+#   - Witchcraft's public Rust API (DB / Embedder / embed_chunks /
+#     full_index / search) is lower-level than the slice imagined and
+#     requires a pickbrain-shaped chunking + embedding pipeline; slice
+#     §7 already flagged the integration as needing first-task
+#     investigation.
+#
+# The wrapper API in this crate (Indexer trait, IndexSubmit, Hit,
+# SearchQuery, SearchResponse, MessageId, Mode) is stable and ships the
+# InMemoryIndexer backend so tasks 10–11 (drainer, search query) can
+# build and unit-test against the trait. Wiring up the production
+# binding lives in a follow-up that resolves the rusqlite version
+# mismatch and writes the pickbrain-style ingestion path.
+#
+# Pinned commit (used once the conflict is resolved):
+# https://github.com/dropbox/witchcraft @ 1370cd569c7a882815cc22169f52dc9aa195cda7
+
+[features]
+default = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
