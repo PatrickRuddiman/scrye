@@ -4,3 +4,21 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 version.workspace = true
+
+[dependencies]
+async-imap = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util", "time", "sync", "rt", "macros"] }
+tokio-util = { version = "0.7", features = ["compat", "rt"] }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+webpki-roots = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+bytes = "1"
+futures = "0.3"
+scryd-config = { path = "../scryd-config" }
+scryd-log = { path = "../scryd-log" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
