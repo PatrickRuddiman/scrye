@@ -9,12 +9,12 @@ use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use scryd_log::{kind, log_failure, log_request};
 
-use crate::handlers;
 use crate::state::AppState;
+use crate::{handlers, handlers_write};
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -23,6 +23,12 @@ pub fn router(state: AppState) -> Router {
         .route("/message/:id/raw", get(handlers::handle_raw))
         .route("/thread/:id", get(handlers::handle_thread))
         .route("/accounts", get(handlers::handle_accounts))
+        .route("/sync", post(handlers_write::handle_sync))
+        .route("/internal/reindex", post(handlers_write::handle_reindex))
+        .route(
+            "/internal/reconcile",
+            post(handlers_write::handle_reconcile),
+        )
         .layer(middleware::from_fn(access_log))
         .with_state(state)
 }

@@ -18,7 +18,7 @@ async fn serve_returns_when_shutdown_signal_resolves() {
     let storage_dir = dir.path().join("data");
     let storage = StorageHandle::open(&storage_dir, 1).unwrap();
     let indexer: Arc<dyn scryd_search::Indexer> = Arc::new(InMemoryIndexer::new());
-    let state = AppState::new(storage, indexer);
+    let state = AppState::new(storage, indexer, scryd_config::Config::default());
     let r = router(state);
 
     let (tx, rx) = oneshot::channel::<()>();

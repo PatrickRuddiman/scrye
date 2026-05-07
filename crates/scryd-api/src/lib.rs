@@ -9,6 +9,7 @@
 
 pub mod dto;
 pub mod handlers;
+pub mod handlers_write;
 pub mod peercred;
 pub mod response;
 pub mod router;

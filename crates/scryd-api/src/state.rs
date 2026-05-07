@@ -4,9 +4,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use scryd_config::Config;
 use scryd_search::{Indexer, Searcher};
 use scryd_storage::StorageHandle;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 /// Active reindex marker. The daemon-wide [`AppState::reindex_lock`] holds
 /// at most one of these at a time.
@@ -22,16 +23,21 @@ pub struct AppState {
     pub searcher: Arc<Searcher>,
     pub indexer: Arc<dyn Indexer>,
     pub reindex_lock: Arc<Mutex<Option<ReindexHandle>>>,
+    /// Hot-reloadable config. The `/internal/reconcile` handler swaps a
+    /// freshly-parsed `Config` in here so add-account flows are picked up
+    /// without restarting the daemon.
+    pub config: Arc<RwLock<Config>>,
 }
 
 impl AppState {
-    pub fn new(storage: StorageHandle, indexer: Arc<dyn Indexer>) -> Self {
+    pub fn new(storage: StorageHandle, indexer: Arc<dyn Indexer>, config: Config) -> Self {
         let searcher = Arc::new(Searcher::new(indexer.clone()));
         Self {
             storage,
             searcher,
             indexer,
             reindex_lock: Arc::new(Mutex::new(None)),
+            config: Arc::new(RwLock::new(config)),
         }
     }
 }

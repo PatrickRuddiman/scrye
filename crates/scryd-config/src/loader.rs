@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::secret::AccountPassword;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct Config {
     /// Reserved. The `[server]` section is empty in v1; XDG-derived paths and
     /// the kernel-enforced socket location replace what would have been bind

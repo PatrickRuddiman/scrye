@@ -1514,6 +1514,7 @@ dependencies = [
  "chrono",
  "mime",
  "nix",
+ "scryd-config",
  "scryd-log",
  "scryd-search",
  "scryd-storage",

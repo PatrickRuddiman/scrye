@@ -78,7 +78,7 @@ async fn setup() -> (TempDir, AppState) {
         .await
         .unwrap();
 
-    let state = AppState::new(storage, indexer);
+    let state = AppState::new(storage, indexer, scryd_config::Config::default());
     (dir, state)
 }
 
