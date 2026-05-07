@@ -19,6 +19,8 @@ thiserror = { workspace = true }
 scryd-config = { path = "../crates/scryd-config" }
 scryd-runtime = { path = "../crates/scryd-runtime" }
 scryd-log = { path = "../crates/scryd-log" }
+urlencoding = "2"
+is-terminal = "0.4"
 
 [dev-dependencies]
 assert_cmd = "2"

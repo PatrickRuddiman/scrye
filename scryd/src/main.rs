@@ -3,6 +3,7 @@
 //! verb the systemd user unit invokes.
 
 mod exit;
+mod output;
 mod uds_client;
 
 use clap::{Parser, Subcommand};
@@ -81,7 +82,7 @@ fn main() {
     match cli.verb {
         Verb::Serve => run_serve(),
         Verb::Reindex => run_reindex(),
-        Verb::Search(_) => run_search_stub(),
+        Verb::Search(args) => run_search(args),
         Verb::AddAccount(_) => run_add_account_stub(),
     }
 }
@@ -137,10 +138,83 @@ fn run_reindex() {
     });
 }
 
-fn run_search_stub() {
-    // Filled in by task 21.
-    eprintln!("scryd search: implementation lands in task 21");
-    std::process::exit(ExitCode::Error.into_raw());
+fn run_search(args: SearchArgs) {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => bail(ExitCode::Error, "error", &e.to_string()),
+    };
+    rt.block_on(async {
+        let client = match uds_client::UdsClient::from_env() {
+            Ok(c) => c,
+            Err(e) => bail(ExitCode::Error, "error", &e.to_string()),
+        };
+
+        let url = build_search_url(&args);
+        let resp = match client.get(&url).await {
+            Ok(r) => r,
+            Err(uds_client::ClientError::DaemonNotRunning(_)) => bail(
+                ExitCode::DaemonNotRunning,
+                "daemon-not-running",
+                "scryd is not running for this user. Start it with: systemctl --user start scryd",
+            ),
+            Err(e) => bail(e.exit_code(), "error", &e.to_string()),
+        };
+
+        if resp.status >= 400 {
+            let msg = std::str::from_utf8(&resp.body).unwrap_or("(non-utf8 body)");
+            bail(
+                ExitCode::DaemonRejected,
+                "daemon-rejected",
+                &format!("status {}: {}", resp.status, msg.trim()),
+            );
+        }
+
+        if args.json {
+            // Emit body verbatim (assumed valid utf-8 JSON).
+            let body = String::from_utf8_lossy(&resp.body);
+            print!("{body}");
+            return;
+        }
+
+        let parsed: serde_json::Value = match serde_json::from_slice(&resp.body) {
+            Ok(v) => v,
+            Err(e) => bail(ExitCode::Error, "error", &format!("parse response: {e}")),
+        };
+        let tty = output::stdout_is_tty();
+        let rendered = output::render_search(&parsed, tty);
+        print!("{rendered}");
+    });
+}
+
+fn build_search_url(args: &SearchArgs) -> String {
+    let mut url = String::from("/search?q=");
+    url.push_str(&urlencoding::encode(&args.query));
+    if let Some(v) = &args.from {
+        url.push_str("&from=");
+        url.push_str(&urlencoding::encode(v));
+    }
+    if let Some(v) = &args.since {
+        url.push_str("&since=");
+        url.push_str(&urlencoding::encode(v));
+    }
+    if let Some(v) = &args.until {
+        url.push_str("&until=");
+        url.push_str(&urlencoding::encode(v));
+    }
+    if let Some(v) = &args.folder {
+        url.push_str("&folder=");
+        url.push_str(&urlencoding::encode(v));
+    }
+    if let Some(v) = &args.account {
+        url.push_str("&account=");
+        url.push_str(&urlencoding::encode(v));
+    }
+    url.push_str(&format!("&limit={}", args.limit));
+    url.push_str(&format!("&mode={}", args.mode));
+    url
 }
 
 fn run_add_account_stub() {
