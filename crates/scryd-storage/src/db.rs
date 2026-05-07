@@ -14,6 +14,12 @@ pub enum StorageError {
     Pragma(#[source] rusqlite::Error),
     #[error("migration failed: {0}")]
     Migration(#[from] migrations::MigrationError),
+    #[error("sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("serialize JSON column: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("invalid account_health value `{0}`")]
+    InvalidHealth(String),
 }
 
 /// Open `meta.sqlite` for read-write, set WAL/sync/foreign-key pragmas, and
