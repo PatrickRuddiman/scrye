@@ -1,0 +1,23 @@
+From: Alice <alice@example.com>
+To: Bob <bob@example.com>
+Subject: Multipart, plain wins
+Date: Mon, 12 Jan 2026 09:00:00 +0000
+Message-ID: <mp-plain-wins@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary42"
+
+--boundary42
+Content-Type: text/plain; charset=utf-8
+
+This plaintext branch is well over one hundred bytes, so the body
+selector should return this content as-is and ignore the HTML branch
+below entirely.
+
+--boundary42
+Content-Type: text/html; charset=utf-8
+
+<html><body><p>This HTML branch is here too but should be ignored
+because the plaintext branch already cleared the 100-byte floor.</p>
+</body></html>
+
+--boundary42--

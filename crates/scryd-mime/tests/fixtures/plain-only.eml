@@ -1,0 +1,15 @@
+From: Alice <alice@example.com>
+To: Bob <bob@example.com>
+Subject: Plain only
+Date: Mon, 12 Jan 2026 09:00:00 +0000
+Message-ID: <plain-only-fixture@example.com>
+Content-Type: text/plain; charset=utf-8
+
+Hello Bob,
+
+This is a plaintext-only message that easily exceeds the 100 byte
+floor that scryd uses to prefer the plaintext branch over HTML, so
+the converter should simply return this body verbatim.
+
+Cheers,
+Alice

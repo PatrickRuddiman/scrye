@@ -1,0 +1,25 @@
+From: Newsletter <news@example.com>
+To: Bob <bob@example.com>
+Subject: Multipart, html wins (plain stub)
+Date: Mon, 12 Jan 2026 09:00:00 +0000
+Message-ID: <mp-html-wins@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary99"
+
+--boundary99
+Content-Type: text/plain; charset=utf-8
+
+View in browser.
+
+--boundary99
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<h1>Big news</h1>
+<p>This is the real content of the message; the plaintext branch
+above is a short stub of under 100 bytes, so the converter should
+fall through to this HTML branch and emit Markdown for it.</p>
+<p>A second paragraph here.</p>
+</body></html>
+
+--boundary99--

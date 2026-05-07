@@ -1,0 +1,17 @@
+From: Marketing <marketing@example.com>
+To: Bob <bob@example.com>
+Subject: HTML only
+Date: Mon, 12 Jan 2026 09:00:00 +0000
+Message-ID: <html-only-fixture@example.com>
+Content-Type: text/html; charset=utf-8
+
+<html><head><style>body { color: red; }</style></head>
+<body>
+<script>tracker('abc');</script>
+<!-- a comment -->
+<p>This is the actual <strong>headline</strong>.</p>
+<p style="color:#ccc">A second paragraph with inline style.</p>
+<img width="1" height="1" src="https://example.com/pixel.gif"/>
+<p>A link: <a href="https://example.com">example</a></p>
+</body>
+</html>

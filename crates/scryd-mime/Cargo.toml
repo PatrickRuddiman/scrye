@@ -4,3 +4,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 version.workspace = true
+
+[dependencies]
+mail-parser = { workspace = true }
+htmd = { workspace = true }
+regex = "1"
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
