@@ -12,6 +12,8 @@ pub mod document;
 pub mod drainer;
 pub mod in_memory;
 pub mod indexer;
+pub mod searcher;
+pub mod snippet;
 
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -125,3 +127,5 @@ pub use document::build as build_document;
 pub use drainer::{Drainer, INDEXER_BATCH, MAX_ATTEMPTS};
 pub use in_memory::InMemoryIndexer;
 pub use indexer::Indexer;
+pub use searcher::{Searcher, K_MIN, K_MULTIPLIER};
+pub use snippet::render as render_snippet;
