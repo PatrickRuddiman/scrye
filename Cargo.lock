@@ -1339,6 +1339,7 @@ dependencies = [
  "scryd-config",
  "scryd-log",
  "serde",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-rustls",

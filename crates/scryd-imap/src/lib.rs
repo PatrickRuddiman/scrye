@@ -9,11 +9,14 @@
 pub mod capabilities;
 pub mod client;
 pub mod connect;
+pub mod credential;
 pub mod fetch;
 pub mod idle;
 pub mod poll;
+pub mod scheduler;
 pub mod sink;
 pub mod state;
+pub mod supervisor;
 pub mod tls;
 pub mod tombstone;
 pub mod uidvalidity;
@@ -41,6 +44,13 @@ pub use connect::login;
 pub use fetch::{fetch_batch, FETCH_ATTRS};
 pub use idle::{emit_idle_drop, emit_idle_enter, emit_idle_recycle, IDLE_RECYCLE};
 pub use poll::{effective_poll_interval, POLL_INTERVAL_FLOOR};
+pub use credential::{ConfigCredentialFetcher, CredentialFetcher};
+pub use scheduler::{
+    backoff_after, BACKOFF_CAP, INITIAL_BACKOFF, MAX_CONNECTIONS_PER_ACCOUNT,
+};
+pub use supervisor::{
+    log_auth_rejection, log_connect_failure, log_push_channel_drop, log_tls_failure,
+};
 pub use tombstone::{compute_tombstones, TOMBSTONE_SCAN_EVERY};
 pub use sink::{FetchedMessage, MessageSink, SyncStateUpdate};
 pub use state::{ConnState, Connection, INCREMENTAL_FETCH_BATCH};

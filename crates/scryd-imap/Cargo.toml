@@ -24,3 +24,4 @@ scryd-log = { path = "../scryd-log" }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "json"] }
+tempfile = "3"
