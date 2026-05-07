@@ -4,3 +4,14 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 version.workspace = true
+
+[dependencies]
+rusqlite = { workspace = true, features = ["bundled"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+scryd-log = { path = "../scryd-log" }
+
+[dev-dependencies]
+tempfile = "3"
