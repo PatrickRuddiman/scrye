@@ -1,0 +1,6 @@
+[package]
+name = "scryd-api"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true

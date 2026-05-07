@@ -1,0 +1,10 @@
+[package]
+name = "scryd"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "scryd"
+path = "src/main.rs"
