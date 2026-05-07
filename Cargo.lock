@@ -1374,6 +1374,24 @@ dependencies = [
 [[package]]
 name = "scryd-runtime"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "hex",
+ "scryd-config",
+ "scryd-imap",
+ "scryd-log",
+ "scryd-mime",
+ "scryd-search",
+ "scryd-storage",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "scryd-search"
@@ -1670,6 +1688,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
