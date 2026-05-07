@@ -6,7 +6,8 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -43,4 +44,5 @@ default = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "json"] }
 tempfile = "3"

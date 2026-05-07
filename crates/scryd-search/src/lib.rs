@@ -9,6 +9,7 @@
 //! the contract well enough for downstream unit tests.
 
 pub mod document;
+pub mod drainer;
 pub mod in_memory;
 pub mod indexer;
 
@@ -121,5 +122,6 @@ pub enum SearchError {
 }
 
 pub use document::build as build_document;
+pub use drainer::{Drainer, INDEXER_BATCH, MAX_ATTEMPTS};
 pub use in_memory::InMemoryIndexer;
 pub use indexer::Indexer;
