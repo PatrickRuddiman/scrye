@@ -20,6 +20,8 @@ pub enum StorageError {
     Json(#[from] serde_json::Error),
     #[error("invalid account_health value `{0}`")]
     InvalidHealth(String),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Open `meta.sqlite` for read-write, set WAL/sync/foreign-key pragmas, and

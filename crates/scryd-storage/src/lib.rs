@@ -6,6 +6,7 @@ pub mod db;
 pub mod handle;
 pub mod messages;
 pub mod migrations;
+pub mod raw;
 pub mod reconcile;
 pub mod sync_state;
 pub mod threading;

@@ -11,8 +11,11 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "fs", "io-util"] }
 uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 scryd-log = { path = "../scryd-log" }
 scryd-config = { path = "../scryd-config" }
 
