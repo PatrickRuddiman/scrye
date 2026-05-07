@@ -1,12 +1,17 @@
-//! Top-level entry point. Task 07 wires up header extraction + body
-//! selection. Task 08 layers attachment enumeration, defensive caps,
-//! address normalization, and encrypted/signed handling on top.
+//! Top-level entry point. Layers caps, encryption classification, address
+//! normalization, references normalization, and attachment enumeration on
+//! top of the body / pre-clean pipeline.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use mail_parser::MessageParser;
 
+use crate::addresses;
+use crate::attachments;
 use crate::body::select_body;
+use crate::caps;
+use crate::encryption::{self, EncryptionClass, ENCRYPTED_PLACEHOLDER};
+use crate::references;
 use crate::{Address, ParseContext, ParseFault, ParseOutcome, ParsedMessage};
 
 /// Parse raw RFC 5322 bytes into a structured outcome.
@@ -18,31 +23,56 @@ pub fn parse(raw_bytes: &[u8], ctx: ParseContext<'_>) -> ParseOutcome {
         }]);
     };
 
+    if let Err(fault) = caps::check_caps(&message) {
+        return ParseOutcome::Unparseable(vec![fault]);
+    }
+
     let mut faults = Vec::new();
 
-    let header_message_id = message.message_id().map(|s| s.to_string());
+    let header_message_id = message
+        .message_id()
+        .and_then(references::normalize_message_id);
     let in_reply_to = message
         .in_reply_to()
         .as_text()
-        .map(|s| s.to_string());
+        .and_then(references::normalize_message_id);
     let references = message
         .references()
         .as_text_list()
-        .map(|list| list.into_iter().map(|s| s.to_string()).collect())
+        .map(|list| {
+            list.into_iter()
+                .filter_map(references::normalize_message_id)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
 
     let subject = message.subject().map(|s| s.to_string());
-    let from = first_address(message.from()).unwrap_or(Address {
-        addr: "unknown".to_string(),
-        name: None,
-    });
-    let to = flatten_addresses(message.to());
-    let cc = flatten_addresses(message.cc());
+    let from = message
+        .from()
+        .and_then(addresses::normalize)
+        .unwrap_or_else(|| Address {
+            addr: "unknown".to_string(),
+            name: None,
+        });
+    let to = message.to().map(addresses::normalize_list).unwrap_or_default();
+    let cc = message.cc().map(addresses::normalize_list).unwrap_or_default();
 
     let date_unix = resolve_date(&message, &ctx, &mut faults);
 
-    let (body_md, body_faults) = select_body(&message);
-    faults.extend(body_faults);
+    let (body_md, attachments_list) = match encryption::classify(&message) {
+        EncryptionClass::PgpEncrypted => {
+            faults.push(ParseFault::EncryptedNotIndexed);
+            (ENCRYPTED_PLACEHOLDER.to_string(), Vec::new())
+        }
+        EncryptionClass::Plain | EncryptionClass::SmimeSigned => {
+            let (body_md, body_faults) = select_body(&message);
+            faults.extend(body_faults);
+
+            let (atts, att_faults) = attachments::enumerate(&message);
+            faults.extend(att_faults);
+            (body_md, atts)
+        }
+    };
 
     let parsed = ParsedMessage {
         header_message_id,
@@ -54,7 +84,7 @@ pub fn parse(raw_bytes: &[u8], ctx: ParseContext<'_>) -> ParseOutcome {
         cc,
         date_unix,
         body_md,
-        attachments: Vec::new(), // Task 08 fills this in.
+        attachments: attachments_list,
     };
 
     if faults.is_empty() {
@@ -83,40 +113,4 @@ fn resolve_date(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
-}
-
-fn first_address(addr: Option<&mail_parser::Address<'_>>) -> Option<Address> {
-    let Some(a) = addr else { return None; };
-    iter_addrs(a).into_iter().next()
-}
-
-fn flatten_addresses(addr: Option<&mail_parser::Address<'_>>) -> Vec<Address> {
-    addr.map(iter_addrs).unwrap_or_default()
-}
-
-fn iter_addrs(a: &mail_parser::Address<'_>) -> Vec<Address> {
-    let mut out = Vec::new();
-    if let Some(list) = a.as_list() {
-        for ad in list {
-            if let Some(addr_str) = ad.address() {
-                out.push(Address {
-                    addr: addr_str.to_string(),
-                    name: ad.name().map(|n| n.to_string()),
-                });
-            }
-        }
-    }
-    if let Some(groups) = a.as_group() {
-        for g in groups {
-            for ad in &g.addresses {
-                if let Some(addr_str) = ad.address() {
-                    out.push(Address {
-                        addr: addr_str.to_string(),
-                        name: ad.name().map(|n| n.to_string()),
-                    });
-                }
-            }
-        }
-    }
-    out
 }

@@ -1,0 +1,26 @@
+From: Marketing <m@example.com>
+To: Bob <bob@example.com>
+Subject: cid image
+Date: Mon, 12 Jan 2026 09:00:00 +0000
+Message-ID: <cid-fixture@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="rel"
+
+--rel
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<h1>Header</h1>
+<p>See <img src="cid:thecat" alt="cat"/> attached. This HTML branch is the
+only body so the converter has to take it after pre-clean and
+inline-image substitution run.</p>
+</body></html>
+
+--rel
+Content-Type: image/png; name="cat.png"
+Content-ID: <thecat>
+Content-Disposition: inline; filename="cat.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=
+--rel--

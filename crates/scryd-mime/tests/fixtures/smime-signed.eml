@@ -1,0 +1,23 @@
+From: Alice <alice@example.com>
+To: Bob <bob@example.com>
+Subject: signed message
+Date: Mon, 12 Jan 2026 09:00:00 +0000
+Message-ID: <smime-fixture@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/signed; protocol="application/pkcs7-signature"; micalg=sha-256; boundary="sig"
+
+--sig
+Content-Type: text/plain; charset=utf-8
+
+This is the signed body inside an S/MIME envelope and it is well
+above the 100-byte plaintext threshold, so the body selector should
+take it transparently after the encryption classifier marks the
+message SmimeSigned.
+
+--sig
+Content-Type: application/pkcs7-signature; name="smime.p7s"
+Content-Disposition: attachment; filename="smime.p7s"
+Content-Transfer-Encoding: base64
+
+MIIDigYJKoZIhvcNAQcCoIIDeAAA
+--sig--

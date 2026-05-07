@@ -6,9 +6,15 @@
 //! normalization, defensive caps, encrypted/signed handling, and the merged
 //! `parse()` entry point on top.
 
+pub mod addresses;
+pub mod attachments;
 pub mod body;
+pub mod caps;
+pub mod encryption;
 pub mod html_clean;
+pub mod inline_images;
 pub mod parse;
+pub mod references;
 
 use serde::{Deserialize, Serialize};
 

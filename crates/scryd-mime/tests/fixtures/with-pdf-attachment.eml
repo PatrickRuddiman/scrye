@@ -1,0 +1,21 @@
+From: Alice <alice@example.com>
+To: Bob <bob@example.com>
+Subject: invoice attached
+Date: Mon, 12 Jan 2026 09:00:00 +0000
+Message-ID: <pdf-fixture@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mix"
+
+--mix
+Content-Type: text/plain; charset=utf-8
+
+Please find the invoice attached. This plaintext branch is well above
+the 100-byte floor so no html branch is needed.
+
+--mix
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="invoice.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJeLjz9MK
+--mix--

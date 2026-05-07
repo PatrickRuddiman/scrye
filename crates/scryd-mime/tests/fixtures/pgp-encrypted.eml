@@ -1,0 +1,19 @@
+From: Alice <alice@example.com>
+To: Bob <bob@example.com>
+Subject: secret
+Date: Mon, 12 Jan 2026 09:00:00 +0000
+Message-ID: <pgp-fixture@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/encrypted; protocol="application/pgp-encrypted"; boundary="enc"
+
+--enc
+Content-Type: application/pgp-encrypted
+
+Version: 1
+--enc
+Content-Type: application/octet-stream
+
+-----BEGIN PGP MESSAGE-----
+hQEMA0Wi1cb37c1QAQf9ABCDEF1234567890abcdef
+-----END PGP MESSAGE-----
+--enc--

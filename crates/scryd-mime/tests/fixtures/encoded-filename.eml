@@ -1,0 +1,21 @@
+From: Alice <alice@example.com>
+To: Bob <bob@example.com>
+Subject: encoded filename
+Date: Mon, 12 Jan 2026 09:00:00 +0000
+Message-ID: <encoded-fixture@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mix"
+
+--mix
+Content-Type: text/plain; charset=utf-8
+
+A short body sufficiently long enough to clear the 100-byte plaintext
+threshold and let the converter return it directly.
+
+--mix
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="=?UTF-8?B?cXVvdGUtIuKXg+KXg+KXgyIucGRm?="
+Content-Transfer-Encoding: base64
+
+UEsDBBQA
+--mix--

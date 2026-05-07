@@ -1,14 +1,17 @@
-//! Body-part selection and the truncation sentinel.
+//! Body-part selection, inline-image cid: substitution, and the truncation
+//! sentinel.
 
 use mail_parser::{Message, MessagePart, MimeHeaders, PartType};
 
 use crate::html_clean::pre_clean;
+use crate::inline_images::substitute_inline_image_placeholders;
 use crate::{ParseFault, BODY_MAX_BYTES, MIN_PLAIN_BYTES};
 
 const TRUNCATION_SENTINEL: &str = "\n\n_[truncated by scryd at 1MB]_";
 
-/// Pick the message body and, if needed, convert HTML→Markdown via `htmd`.
-/// Returns the resulting Markdown plus any faults (e.g. truncation).
+/// Pick the message body and, if going through the HTML branch, run
+/// pre-clean → cid-substitution → htmd. Returns the resulting Markdown plus
+/// any faults (e.g. truncation).
 pub fn select_body(message: &Message<'_>) -> (String, Vec<ParseFault>) {
     let mut faults = Vec::new();
 
@@ -21,10 +24,9 @@ pub fn select_body(message: &Message<'_>) -> (String, Vec<ParseFault>) {
         plain
     } else if let Some(html) = first_text_part(message, "html") {
         let cleaned = pre_clean(html);
-        htmd::convert(&cleaned).unwrap_or_else(|_| cleaned)
+        let md = htmd::convert(&cleaned).unwrap_or(cleaned);
+        substitute_inline_image_placeholders(&md, message)
     } else if !plain.is_empty() {
-        // Plain branch under the threshold but no HTML branch — use what we
-        // have rather than dropping the body altogether.
         plain
     } else {
         String::new()
@@ -75,11 +77,7 @@ fn first_text_part<'a>(message: &'a Message<'a>, subtype: &str) -> Option<&'a st
 
 fn is_text_part_with_subtype(part: &MessagePart<'_>, subtype: &str) -> bool {
     match &part.body {
-        PartType::Text(_) if subtype == "plain" => {
-            // mail-parser maps text/plain to PartType::Text by default;
-            // double-check the Content-Type if the header is set.
-            content_type_subtype_matches(part, "plain")
-        }
+        PartType::Text(_) if subtype == "plain" => content_type_subtype_matches(part, "plain"),
         PartType::Html(_) if subtype == "html" => content_type_subtype_matches(part, "html"),
         _ => false,
     }
@@ -87,10 +85,10 @@ fn is_text_part_with_subtype(part: &MessagePart<'_>, subtype: &str) -> bool {
 
 fn content_type_subtype_matches(part: &MessagePart<'_>, expected: &str) -> bool {
     let Some(ct) = part.content_type() else {
-        // Default per RFC 2046 is text/plain, so an absent Content-Type
-        // counts as plain.
         return expected == "plain";
     };
-    let Some(sub) = ct.subtype() else { return expected == "plain"; };
+    let Some(sub) = ct.subtype() else {
+        return expected == "plain";
+    };
     sub.eq_ignore_ascii_case(expected)
 }
