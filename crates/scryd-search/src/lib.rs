@@ -2,11 +2,17 @@
 //! public types (`MessageId`, `Mode`, `IndexSubmit`, `Hit`, `SearchQuery`,
 //! `SearchResponse`) that downstream tasks build against.
 //!
-//! The production binding to `dropbox/witchcraft` is intentionally not yet
-//! declared as a Cargo dep — see this crate's `Cargo.toml` for the rationale
-//! (rusqlite-version conflict + low-level upstream API requiring deeper
-//! integration). [`InMemoryIndexer`] is the default backend that satisfies
-//! the contract well enough for downstream unit tests.
+//! Two backends ship:
+//!   - [`WitchcraftIndexer`] — the production indexer, backed by
+//!     `dropbox/witchcraft`. Default. Only pulled in on Linux targets
+//!     because the upstream toolchain (candle, fbgemm-rs) is Linux-only
+//!     for scryd's purposes. Activate the `witchcraft-backend` feature
+//!     explicitly to be sure; it's on by default.
+//!   - [`InMemoryIndexer`] — a test stub. Available unconditionally;
+//!     callers that want it instead of witchcraft (unit tests, dev
+//!     workflows on non-Linux hosts) can either depend on this crate
+//!     `default-features = false` or instantiate `InMemoryIndexer`
+//!     directly even when the witchcraft feature is on.
 
 pub mod document;
 pub mod drainer;

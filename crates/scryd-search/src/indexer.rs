@@ -1,5 +1,5 @@
 //! Indexer trait the drainer (task 10) and api slice (task 18) consume.
-//! Both `InMemoryIndexer` and (eventually) `WitchcraftHandle` implement it.
+//! Both `InMemoryIndexer` and `WitchcraftIndexer` implement it.
 
 use async_trait::async_trait;
 
@@ -8,9 +8,12 @@ use crate::{IndexError, IndexSubmit, MessageId, SearchError, SearchQuery, Search
 /// Operations the search-engine wrapper exposes upstream.
 ///
 /// Implementations:
-/// - [`crate::InMemoryIndexer`]: lightweight stub; default for tests.
-/// - `WitchcraftHandle` (gated on feature `witchcraft-backend`): the
-///   production binding.
+/// - [`crate::WitchcraftIndexer`] (default; gated on the
+///   `witchcraft-backend` feature, which ships on by default):
+///   the production binding to `dropbox/witchcraft`.
+/// - [`crate::InMemoryIndexer`]: a lightweight stub used by tests and by
+///   non-Linux dev workflows that don't want to pull the upstream
+///   toolchain.
 #[async_trait]
 pub trait Indexer: Send + Sync {
     async fn submit(&self, submit: IndexSubmit) -> Result<(), IndexError>;

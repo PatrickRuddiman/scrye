@@ -17,24 +17,30 @@ uuid = { version = "1", features = ["v5"] }
 scryd-storage = { path = "../scryd-storage" }
 scryd-log = { path = "../scryd-log" }
 
-# Witchcraft is OPTIONAL and gated behind the `witchcraft-backend`
-# feature flag. Default builds use the InMemoryIndexer and never pull in
-# witchcraft / candle-core / fbgemm-rs. Per-arch features mirror
-# build-and-packaging slice §3 Decision 2.
-[target.'cfg(target_arch = "x86_64")'.dependencies]
+# Witchcraft is the default production indexer. Per-arch features
+# mirror build-and-packaging slice §3 Decision 2. Pulled in only on
+# Linux targets — the production daemon is Linux-only by spec, and
+# this avoids forcing candle / fbgemm to compile on Windows / macOS
+# hosts where developers may run `cargo check`.
+#
+# Tests and dev builds that want a stub indexer can opt out with
+# `cargo build --no-default-features` / `cargo test --no-default-features`,
+# which falls back to InMemoryIndexer.
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 witchcraft = { workspace = true, optional = true, features = ["t5-quantized", "fbgemm", "hybrid-dequant"] }
 candle-core = { workspace = true, optional = true }
 
-[target.'cfg(target_arch = "aarch64")'.dependencies]
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
 witchcraft = { workspace = true, optional = true, features = ["t5-quantized"] }
 candle-core = { workspace = true, optional = true }
 
 [features]
-default = []
+default = ["witchcraft-backend"]
 # Pull in the dropbox/witchcraft binding. Compiles candle-core +
 # fbgemm-rs (x86_64) or candle-core only (aarch64); first build is
-# slow. Off by default so the workspace stays buildable on hosts
-# without the upstream toolchain.
+# slow but cached afterwards. On non-Linux hosts the feature flag is
+# inert because the witchcraft + candle-core deps only resolve under
+# the Linux target tables above.
 witchcraft-backend = ["dep:witchcraft", "dep:candle-core"]
 
 [dev-dependencies]
