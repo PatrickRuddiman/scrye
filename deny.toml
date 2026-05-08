@@ -23,17 +23,36 @@ allow = [
     "MPL-2.0",
     "CC0-1.0",
     "0BSD",
+    # webpki-roots ships under CDLA-Permissive-2.0 because the trust
+    # anchor data comes from the Mozilla CA bundle. Permissive license
+    # compatible with our Apache-2.0 ship.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.85
 
 [bans]
 multiple-versions = "warn"
+# Wildcard pinning ('*') in published deps is still denied, but path-based
+# workspace deps (`scryd-storage = { path = "../scryd-storage" }`) are
+# exempt — Cargo treats those as wildcards by definition and there's no
+# version field to add.
 wildcards = "deny"
+allow-wildcard-paths = true
 
 [advisories]
 version = 2
 yanked = "warn"
-ignore = []
+ignore = [
+    # async-std is unmaintained (RUSTSEC-2025-0052). Pulled transitively
+    # via async-imap → scryd-imap. Tracking upstream's migration to smol;
+    # not exploitable in our codepath (we drive async-imap from tokio,
+    # not async-std's executor).
+    "RUSTSEC-2025-0052",
+    # paste is unmaintained (RUSTSEC-2024-0436). Pulled deep into the
+    # gemm / candle / witchcraft tree. Compile-time-only macro crate
+    # with no runtime exposure; safe to ride on the existing version.
+    "RUSTSEC-2024-0436",
+]
 
 [sources]
 unknown-registry = "deny"
