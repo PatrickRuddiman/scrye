@@ -15,6 +15,9 @@ pub mod indexer;
 pub mod searcher;
 pub mod snippet;
 
+#[cfg(feature = "witchcraft-backend")]
+pub mod witchcraft_handle;
+
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -129,3 +132,6 @@ pub use in_memory::InMemoryIndexer;
 pub use indexer::Indexer;
 pub use searcher::{Searcher, K_MIN, K_MULTIPLIER};
 pub use snippet::render as render_snippet;
+
+#[cfg(feature = "witchcraft-backend")]
+pub use witchcraft_handle::WitchcraftIndexer;

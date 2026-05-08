@@ -9,40 +9,43 @@ version.workspace = true
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = "0.1"
+uuid = { version = "1", features = ["v5"] }
 scryd-storage = { path = "../scryd-storage" }
 scryd-log = { path = "../scryd-log" }
 
-# dropbox/witchcraft is the production search-engine binding the
-# search-engine slice commits to. The dep is intentionally NOT declared
-# here yet:
-#
-#   - Witchcraft pins rusqlite 0.35 (libsqlite3-sys 0.33). scryd-storage
-#     pins rusqlite 0.31 (libsqlite3-sys 0.28). Cargo's `links = "sqlite3"`
-#     uniqueness rule rejects the dep graph even with witchcraft gated
-#     behind an optional feature flag.
-#   - Witchcraft's public Rust API (DB / Embedder / embed_chunks /
-#     full_index / search) is lower-level than the slice imagined and
-#     requires a pickbrain-shaped chunking + embedding pipeline; slice
-#     §7 already flagged the integration as needing first-task
-#     investigation.
-#
-# The wrapper API in this crate (Indexer trait, IndexSubmit, Hit,
-# SearchQuery, SearchResponse, MessageId, Mode) is stable and ships the
-# InMemoryIndexer backend so tasks 10–11 (drainer, search query) can
-# build and unit-test against the trait. Wiring up the production
-# binding lives in a follow-up that resolves the rusqlite version
-# mismatch and writes the pickbrain-style ingestion path.
-#
-# Pinned commit (used once the conflict is resolved):
-# https://github.com/dropbox/witchcraft @ 1370cd569c7a882815cc22169f52dc9aa195cda7
+# Witchcraft is OPTIONAL and gated behind the `witchcraft-backend`
+# feature flag. Default builds use the InMemoryIndexer and never pull in
+# witchcraft / candle-core / fbgemm-rs. Per-arch features mirror
+# build-and-packaging slice §3 Decision 2.
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+witchcraft = { workspace = true, optional = true, features = ["t5-quantized", "fbgemm", "hybrid-dequant"] }
+candle-core = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+witchcraft = { workspace = true, optional = true, features = ["t5-quantized"] }
+candle-core = { workspace = true, optional = true }
 
 [features]
 default = []
+# Pull in the dropbox/witchcraft binding. Compiles candle-core +
+# fbgemm-rs (x86_64) or candle-core only (aarch64); first build is
+# slow. Off by default so the workspace stays buildable on hosts
+# without the upstream toolchain.
+witchcraft-backend = ["dep:witchcraft", "dep:candle-core"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "json"] }
 tempfile = "3"
+
+# The witchcraft integration test only builds when the upstream binding
+# is wired in. Without `required-features` cargo would try to compile
+# the test against unresolved imports.
+[[test]]
+name = "witchcraft"
+path = "tests/witchcraft.rs"
+required-features = ["witchcraft-backend"]
