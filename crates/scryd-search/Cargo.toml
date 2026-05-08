@@ -17,11 +17,11 @@ uuid = { version = "1", features = ["v5"] }
 scryd-storage = { path = "../scryd-storage" }
 scryd-log = { path = "../scryd-log" }
 
-# Witchcraft is the default production indexer. Per-arch features
-# mirror build-and-packaging slice §3 Decision 2. Pulled in only on
-# Linux targets — the production daemon is Linux-only by spec, and
-# this avoids forcing candle / fbgemm to compile on Windows / macOS
-# hosts where developers may run `cargo check`.
+# Witchcraft is the default production indexer. Per-arch / per-OS
+# features mirror build-and-packaging slice §3 Decision 2 + the
+# upstream README's recommended sets. Only Unix-y targets get the dep
+# — Windows ports are a v2 follow-up that will require a non-trivial
+# IPC + service-manager port anyway.
 #
 # Tests and dev builds that want a stub indexer can opt out with
 # `cargo build --no-default-features` / `cargo test --no-default-features`,
@@ -32,6 +32,18 @@ candle-core = { workspace = true, optional = true }
 
 [target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
 witchcraft = { workspace = true, optional = true, features = ["t5-quantized"] }
+candle-core = { workspace = true, optional = true }
+
+# Apple Silicon: t5-quantized + metal (witchcraft README's recommended
+# Apple Silicon set).
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+witchcraft = { workspace = true, optional = true, features = ["t5-quantized", "metal"] }
+candle-core = { workspace = true, optional = true }
+
+# Intel Mac: t5-quantized + fbgemm + hybrid-dequant (witchcraft
+# README's recommended Intel Mac set).
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+witchcraft = { workspace = true, optional = true, features = ["t5-quantized", "fbgemm", "hybrid-dequant"] }
 candle-core = { workspace = true, optional = true }
 
 [features]
