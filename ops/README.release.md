@@ -44,7 +44,7 @@ install by `scryd-fetch-weights`.
    git push origin vX.Y.Z
    ```
 3. **Watch the workflow** at
-   `https://github.com/<owner>/mail-clawd/actions/workflows/release.yml`.
+   `https://github.com/PatrickRuddiman/scrye/actions/workflows/release.yml`.
    Both matrix jobs must succeed:
    - `license check (cargo deny)` — every dependency license must be on
      the allow-list in `deny.toml`.

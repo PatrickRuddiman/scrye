@@ -18,8 +18,8 @@ $ErrorActionPreference = 'Stop'
 
 $image       = 'rust:1-bookworm'
 $workspace   = (Get-Location).Path
-$targetVol   = 'mail-clawd-target'
-$cargoVol    = 'mail-clawd-cargo'
+$targetVol   = 'scrye-target'
+$cargoVol    = 'scrye-cargo'
 
 docker volume create $targetVol | Out-Null
 docker volume create $cargoVol  | Out-Null

@@ -13,8 +13,8 @@ set -euo pipefail
 
 image="rust:1-bookworm"
 workspace="$(pwd)"
-target_vol="mail-clawd-target"
-cargo_vol="mail-clawd-cargo"
+target_vol="scrye-target"
+cargo_vol="scrye-cargo"
 
 docker volume create "$target_vol" >/dev/null
 docker volume create "$cargo_vol"  >/dev/null

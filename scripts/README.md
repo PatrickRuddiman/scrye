@@ -6,9 +6,9 @@ Helpers for working on scryd from a non-Linux host.
 
 Spawns a one-shot or interactive Debian-based Rust container with the repo
 mounted at `/workspace`. Linux build artifacts go into a named Docker volume
-(`mail-clawd-target`) instead of the host's `target/` directory, so cross-
+(`scrye-target`) instead of the host's `target/` directory, so cross-
 platform development doesn't clobber the host's build cache. The cargo
-registry caches in another named volume (`mail-clawd-cargo`) so dependency
+registry caches in another named volume (`scrye-cargo`) so dependency
 fetches survive container restarts.
 
 ### Windows (PowerShell)
@@ -43,7 +43,7 @@ runs are instant. The named volumes are created automatically.
 ### Reset
 
 ```powershell
-docker volume rm mail-clawd-target mail-clawd-cargo
+docker volume rm scrye-target scrye-cargo
 ```
 
 removes the cached target dir and cargo registry without touching the repo.
