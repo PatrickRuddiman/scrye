@@ -22,31 +22,17 @@ jobs:
   build:
     name: build (${{ matrix.target }})
     needs: license-check
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
             arch: x86_64
-            os_name: linux
             cross: false
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04
             arch: aarch64
-            os_name: linux
             cross: true
-          - target: x86_64-apple-darwin
-            os: macos-13
-            arch: x86_64
-            os_name: macos
-            cross: false
-          - target: aarch64-apple-darwin
-            os: macos-14
-            arch: aarch64
-            os_name: macos
-            cross: false
     steps:
       - uses: actions/checkout@v4
 
@@ -63,9 +49,14 @@ jobs:
         if: matrix.cross == true
         run: cargo install cross --locked --version 0.2.5
 
-      - name: verify systemd unit
-        if: matrix.os_name == 'linux'
-        run: systemd-analyze verify ops/scryd.service
+      - name: verify systemd unit template
+        run: |
+          set -euo pipefail
+          rendered="$(mktemp -d)/scryd.service"
+          sed -e 's/__UID__/1000/g' -e 's/__USER__/scryd/g' \
+              ops/scryd.service.in > "$rendered"
+          systemd-analyze verify "$rendered"
+        shell: bash
 
       - name: cargo test --workspace
         if: matrix.cross == false
@@ -87,22 +78,18 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME:-dev}"
           stage="$(mktemp -d)"
-          out="scryd-${tag}-${{ matrix.arch }}-${{ matrix.os_name }}"
+          out="scryd-${tag}-${{ matrix.arch }}-linux"
           mkdir -p "$stage/$out"
           cp "target/${{ matrix.target }}/release/scryd" "$stage/$out/"
           cp "target/${{ matrix.target }}/release/scryd-fetch-weights" "$stage/$out/"
           cp LICENSE "$stage/$out/"
-          if [ "${{ matrix.os_name }}" = "linux" ]; then
-            cp ops/scryd.service "$stage/$out/"
-            cp ops/install.sh "$stage/$out/"
-            cp ops/README.install.md "$stage/$out/"
-          fi
+          cp ops/scryd.service.in "$stage/$out/"
+          cp ops/scryd.tmpfiles.in "$stage/$out/"
+          cp ops/install.sh "$stage/$out/"
+          cp ops/uninstall.sh "$stage/$out/"
+          cp ops/README.install.md "$stage/$out/"
           tar -czf "${out}.tar.gz" -C "$stage" "$out"
-          if command -v sha256sum >/dev/null; then
-            sha256sum "${out}.tar.gz" | awk '{print $1}' > "${out}.sha256"
-          else
-            shasum -a 256 "${out}.tar.gz" | awk '{print $1}' > "${out}.sha256"
-          fi
+          sha256sum "${out}.tar.gz" | awk '{print $1}' > "${out}.sha256"
           echo "tarball=${out}.tar.gz" >> "$GITHUB_OUTPUT"
           echo "sha256_file=${out}.sha256" >> "$GITHUB_OUTPUT"
         shell: bash
@@ -110,7 +97,7 @@ jobs:
       - name: upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: scryd-${{ matrix.arch }}-${{ matrix.os_name }}
+          name: scryd-${{ matrix.arch }}-linux
           path: |
             ${{ steps.package.outputs.tarball }}
             ${{ steps.package.outputs.sha256_file }}
