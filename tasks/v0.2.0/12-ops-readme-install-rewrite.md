@@ -9,7 +9,7 @@ _Tick `[x]` on each Tasks item as you finish it, and on each Acceptance item as 
 Rewrite `ops/README.install.md` to walk the v0.2.0 system-install flow: one-command sudo install, isolation properties table, daily-use commands with sudo notes, daemon reload after config edits, uninstall, v0.1.0 → v0.2.0 transition, v0.2.x upgrade, and journalctl recipes for the system unit.
 
 ## Tasks
-- [ ] Rewrite `ops/README.install.md` with the following sections in order:
+- [x] Rewrite `ops/README.install.md` with the following sections in order:
   1. **Quick install.** One block: `tar -xzf scryd-vX.Y.Z-x86_64-linux.tar.gz`, `cd scryd-vX.Y.Z-x86_64-linux`, `sudo ./install.sh`. Mention `--user <name>` if the operator wants to install for a user other than `$SUDO_USER`.
   2. **What the install creates.** Bullet list mirroring build-and-packaging slice §4 (FHS layout): `/usr/local/bin/scryd`, `/etc/scryd/config.toml` (`scryd:scryd` 0600), `/var/lib/scryd/`, `/run/scryd/`, `/etc/systemd/system/scryd.service`, `/etc/tmpfiles.d/scryd.conf`. One line per artifact.
   3. **Isolation properties.** The alice / mallory table from build-and-packaging slice §1 of the v0.2.0 spec. Operations: `open(/etc/scryd/config.toml)`, `connect(/run/scryd/scryd.sock)`, `ptrace daemon`, `read /var/lib/scryd/...`. Outcomes: ✅ / ❌ + one-line reason.
@@ -23,17 +23,17 @@ Rewrite `ops/README.install.md` to walk the v0.2.0 system-install flow: one-comm
   11. **glibc requirement.** The release tarball requires `glibc >= 2.34` (Ubuntu 22.04+, Debian 12+, Fedora 36+, Arch). Older distros need to build from source.
 
 ## Acceptance criteria
-- [ ] `test -f ops/README.install.md`.
-- [ ] `grep -F 'sudo ./install.sh' ops/README.install.md` matches the quick-install block.
-- [ ] `grep -F 'sudo ./uninstall.sh' ops/README.install.md` matches the uninstall section.
-- [ ] `grep -F '--remove-v01-data' ops/README.install.md` matches the migration section.
-- [ ] `grep -F 'sudo scryd add-account' ops/README.install.md` matches the daily-use section.
-- [ ] `grep -F 'sudo scryd rotate-password' ops/README.install.md` matches.
-- [ ] `grep -F 'sudo scryd remove-account' ops/README.install.md` matches.
-- [ ] `grep -F 'journalctl -u scryd' ops/README.install.md` matches (no `--user` form).
-- [ ] `! grep -F 'journalctl --user -u scryd' ops/README.install.md` (no v0.1.0 user-form recipe leaks).
-- [ ] `grep -F 'sudo systemctl restart scryd' ops/README.install.md` matches.
-- [ ] `grep -E 'Isolation' ops/README.install.md` matches the section heading.
-- [ ] `grep -F '/etc/scryd/config.toml' ops/README.install.md` matches.
+- [x] `test -f ops/README.install.md`.
+- [x] `grep -F 'sudo ./install.sh' ops/README.install.md` matches the quick-install block.
+- [x] `grep -F 'sudo ./uninstall.sh' ops/README.install.md` matches the uninstall section.
+- [x] `grep -F '--remove-v01-data' ops/README.install.md` matches the migration section.
+- [x] `grep -F 'sudo scryd add-account' ops/README.install.md` matches the daily-use section.
+- [x] `grep -F 'sudo scryd rotate-password' ops/README.install.md` matches.
+- [x] `grep -F 'sudo scryd remove-account' ops/README.install.md` matches.
+- [x] `grep -F 'journalctl -u scryd' ops/README.install.md` matches (no `--user` form).
+- [x] `! grep -F 'journalctl --user -u scryd' ops/README.install.md` (no v0.1.0 user-form recipe leaks).
+- [x] `grep -F 'sudo systemctl restart scryd' ops/README.install.md` matches.
+- [x] `grep -E 'Isolation' ops/README.install.md` matches the section heading.
+- [x] `grep -F '/etc/scryd/config.toml' ops/README.install.md` matches.
 
 > If a `## Tasks` checkbox can't be completed without changing what the parent slice specifies, stop and update the slice. Do not redesign here.

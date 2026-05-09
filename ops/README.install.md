@@ -1,114 +1,153 @@
 # Installing scryd
 
-scryd is a per-user daemon. Each operator on a Linux host installs and
-runs their own instance under their own user account; OS-level identity
-prevents one operator's processes from reaching another's instance.
+scryd v0.2.0 runs as a dedicated `scryd` Linux system user. The
+operator's account talks to the daemon over a Unix-domain socket but
+never holds the IMAP credential on disk; only the daemon's UID can
+read `/etc/scryd/config.toml`. Agents and scripts running under the
+operator's UID share that property — they can search, but they cannot
+read the password.
 
 ## Quick install
 
-Download the per-arch tarball from GitHub Releases for your host arch
-(`x86_64-linux` or `aarch64-linux`), extract, and run the bundled
-installer:
+Download the per-arch tarball from GitHub Releases (`x86_64-linux`
+or `aarch64-linux`), extract, and run the installer with sudo:
 
 ```sh
-tar xzf scryd-vX.Y.Z-x86_64-linux.tar.gz
+tar -xzf scryd-vX.Y.Z-x86_64-linux.tar.gz
 cd scryd-vX.Y.Z-x86_64-linux
-./install.sh
+sudo ./install.sh
 ```
 
-`install.sh` does:
-
-1. Refuses to run as root.
-2. Resolves `$XDG_CONFIG_HOME` (default `~/.config`) and `$XDG_DATA_HOME`
-   (default `~/.local/share`).
-3. Copies `scryd` and `scryd-fetch-weights` to `~/.local/bin/` (mode `0755`).
-4. Copies `scryd.service` to `~/.config/systemd/user/scryd.service`.
-5. Creates `$XDG_CONFIG_HOME/scryd/`, `$XDG_DATA_HOME/scryd/`, and
-   `$XDG_DATA_HOME/scryd/assets/` at mode `0700`.
-6. Runs `scryd-fetch-weights --target $XDG_DATA_HOME/scryd/assets/` to
-   download and SHA-256-verify the T5 weights bundle.
-7. Runs `systemctl --user daemon-reload` so the new unit is visible.
-8. Prints next steps.
-
-If `~/.local/bin` is not in your `$PATH`, the script warns; add this
-to your shell rc:
+By default `install.sh` resolves the operator from `$SUDO_USER`. To
+install for a different user (e.g. provisioning a fresh host as a
+human admin for a service account):
 
 ```sh
-export PATH="$HOME/.local/bin:$PATH"
+sudo ./install.sh --user alice
 ```
 
-## After install
+## What the install creates
+
+| Artifact | Owner | Mode | Notes |
+|---|---|---|---|
+| `/usr/local/bin/scryd` | root:root | 0755 | daemon + CLI binary |
+| `/usr/local/bin/scryd-fetch-weights` | root:root | 0755 | weights downloader |
+| `/etc/scryd/config.toml` | scryd:scryd | 0600 | IMAP accounts (operator can't read) |
+| `/var/lib/scryd/` | scryd:scryd | 0700 | meta DB + index |
+| `/var/lib/scryd/assets/` | scryd:scryd | 0755 | T5 weights (mmap, world-readable) |
+| `/run/scryd/` | scryd:&lt;operator&gt; | 0750 | runtime dir; provisioned by tmpfiles.d at boot |
+| `/etc/systemd/system/scryd.service` | root:root | 0644 | rendered from `scryd.service.in` |
+| `/etc/tmpfiles.d/scryd.conf` | root:root | 0644 | rendered from `scryd.tmpfiles.in` |
+
+## Isolation properties
+
+| Operation | Operator (`alice`) | Other Linux user (`mallory`) |
+|---|---|---|
+| `open("/etc/scryd/config.toml")` | EACCES (different UID, mode 0600) | EACCES |
+| `connect("/run/scryd/scryd.sock")` | OK (group `alice`, mode 0660) | EACCES (not in the runtime-dir group) |
+| `ptrace(scryd_pid)` | EPERM (different UID, YAMA blocks) | EPERM |
+| `read("/var/lib/scryd/...")` | EACCES (mode 0700) | EACCES |
+
+`alice`'s shell, MCP servers, and LLM agents share `alice`'s UID so
+they get the same row as `alice`: socket access yes, config access
+no. That is the property "agents cannot reach the credential."
+
+## First account configuration
 
 ```sh
-scryd add-account                    # interactive credential capture
-systemctl --user enable --now scryd  # start now + enable on next login
-
-# Optional: survive logout / start at boot
-loginctl enable-linger "$USER"
+sudo scryd add-account
+sudo systemctl restart scryd
 ```
 
-## Manual install (no installer)
+If the daemon was not yet running, the CLI prints
+`apply changes: sudo systemctl start scryd` instead.
+
+## Daily use
+
+Reads (no sudo needed; the operator's UID is allowed on the socket):
 
 ```sh
-mkdir -p ~/.local/bin ~/.config/systemd/user ~/.config/scryd ~/.local/share/scryd/assets
-chmod 0700 ~/.config/scryd ~/.local/share/scryd ~/.local/share/scryd/assets
-
-install -m 0755 ./scryd                  ~/.local/bin/scryd
-install -m 0755 ./scryd-fetch-weights    ~/.local/bin/scryd-fetch-weights
-install -m 0644 ./scryd.service          ~/.config/systemd/user/scryd.service
-
-~/.local/bin/scryd-fetch-weights --target ~/.local/share/scryd/assets
-systemctl --user daemon-reload
+scryd search "lunch with bob since:2026-01-01"
+scryd reindex
 ```
 
-The weights bundle URL and expected SHA-256 are baked into
-`scryd-fetch-weights`; for air-gapped installs override with
-`--url file:///path/to/local/copy.gguf --sha256 <hex>`.
-
-## Uninstall
-
-scryd doesn't ship an uninstall script; the layout is well-defined:
+Mutations (sudo because only the daemon's UID can write the config;
+each mutation prints a restart hint):
 
 ```sh
-systemctl --user disable --now scryd
-rm ~/.local/bin/scryd ~/.local/bin/scryd-fetch-weights
-rm ~/.config/systemd/user/scryd.service
-rm -rf ~/.config/scryd ~/.local/share/scryd
+sudo scryd add-account
+sudo scryd rotate-password <account-id>
+sudo scryd remove-account <account-id>
+sudo systemctl restart scryd
 ```
-
-This removes the binary, the unit, the config (including the IMAP
-credential), the indexed mail cache, and the T5 weights. systemd
-flushes the unit's enabled state on `disable`.
 
 ## Logs
 
-scryd writes structured JSON-Lines to stderr; systemd captures it into
-the per-user journal.
+scryd is a system unit, so the journal is the system journal — no
+`--user` flag.
 
 ```sh
-# tail
-journalctl --user -u scryd -f
+# live tail
+journalctl -u scryd -f
 
-# all errors for one account
-journalctl --user -u scryd --output cat \
-  | jq 'select(.level=="error" and .account_id=="primary")'
+# last 200 lines as raw JSON
+journalctl -u scryd --output cat -n 200
 
-# failure-category breakdown
-journalctl --user -u scryd --output cat -n 200 \
-  | jq -r '.category // empty' | sort | uniq -c | sort -rn
+# filter by failure category (categories are listed in the spec)
+journalctl -u scryd --output json \
+  | jq 'select(.MESSAGE | contains("non-owner-user connection rejection"))'
 ```
+
+## Uninstall
+
+```sh
+sudo ./uninstall.sh
+```
+
+Removes the system service, unit file, tmpfiles drop-in, the FHS
+directory tree (`/etc/scryd`, `/var/lib/scryd`, `/run/scryd`), the
+binaries, and the `scryd` Linux account. Idempotent: a second run
+prints `nothing was installed`.
+
+## v0.1.0 → v0.2.0 migration
+
+v0.1.0 was a per-user install at `~/.local/bin/scryd` +
+`~/.config/scryd/`. v0.2.0 is a system install with a different
+on-disk layout. There is no in-place migration of the v0.1.0 index
+(see `scryd-spec-v0.2.0.md` §3 Out).
+
+If `install.sh` detects a v0.1.0 layout for any user on the host, it
+exits 2 and lists the sentinel files it found. Re-run with
+`--remove-v01-data` to wipe each user's per-user binary, unit, config
+and data:
+
+```sh
+sudo ./install.sh --remove-v01-data
+```
+
+After v0.2.0 is in place, run `sudo scryd add-account` with the same
+account id and password as before; the daemon resyncs from IMAP.
+
+## v0.2.x → v0.2.(x+1) upgrade
+
+Re-run the installer:
+
+```sh
+sudo ./install.sh
+```
+
+`install.sh` is idempotent on a v0.2.x host. The binary and unit are
+replaced; `/etc/scryd/config.toml`, `/var/lib/scryd/`, and the index
+are preserved. systemd restarts the daemon on the unit reload.
 
 ## Multi-user hosts
 
-Multiple operators can install their own scryd instance on the same
-host. Each operator runs `./install.sh` as their own user; the per-user
-`$XDG_RUNTIME_DIR` and `$XDG_DATA_HOME` paths give each instance its
-own socket, data dir, and weights file. OS-level file permissions
-prevent one operator's processes from reaching another operator's
-instance — see the spec for the full trust-boundary discussion.
+v0.2.0 is single-operator per host. If you need multiple operators
+sharing one daemon, that's deferred to v0.3.0 (see `scryd-spec-v0.2.0.md`
+§3 Out). Today, run multiple Linux hosts or VMs.
 
-## Floor: glibc 2.34+
+## glibc requirement
 
-scryd targets glibc 2.34 or newer (Ubuntu 22.04, Debian 12, Fedora 36,
-RHEL 9). On older distros, build from source against your local
-toolchain.
+Release tarballs require glibc 2.34 or newer (Ubuntu 22.04+, Debian 12+,
+Fedora 36+, Arch). On older distros, build from source against your
+local toolchain.
