@@ -32,6 +32,10 @@ enum Verb {
     #[command(name = "rotate-password", about = "Rotate the IMAP credential for a configured account")]
     RotatePassword(RotatePasswordArgs),
 
+    /// Remove a configured IMAP account.
+    #[command(name = "remove-account", about = "Remove a configured IMAP account")]
+    RemoveAccount(RemoveAccountArgs),
+
     /// Trigger a full reindex on the running daemon.
     Reindex,
 
@@ -68,6 +72,13 @@ struct RotatePasswordArgs {
 }
 
 #[derive(clap::Args, Debug)]
+struct RemoveAccountArgs {
+    account_id: String,
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(clap::Args, Debug)]
 struct SearchArgs {
     /// The free-form search query.
     query: String,
@@ -97,6 +108,7 @@ fn main() {
         Verb::Search(args) => run_search(args),
         Verb::AddAccount(args) => run_add_account(args),
         Verb::RotatePassword(args) => run_rotate_password(args),
+        Verb::RemoveAccount(args) => run_remove_account(args),
     }
 }
 
@@ -356,6 +368,56 @@ fn run_rotate_password(args: RotatePasswordArgs) {
 
     chown_to_scryd(&config_path);
     println!("password rotated for '{}'", args.account_id);
+    print_restart_hint();
+}
+
+fn run_remove_account(args: RemoveAccountArgs) {
+    use std::io::{BufRead, Write};
+
+    if cli_effective_euid() != 0 {
+        bail(
+            ExitCode::BadInput,
+            "bad-input",
+            "remove-account requires root (try: sudo scryd remove-account ...)",
+        );
+    }
+
+    let id_re = regex::Regex::new(r"^[a-z0-9_-]+$").expect("valid regex");
+    if !id_re.is_match(&args.account_id) {
+        bail(
+            ExitCode::BadInput,
+            "bad-input",
+            &format!("account id `{}` must match ^[a-z0-9_-]+$", args.account_id),
+        );
+    }
+
+    let config_path = match resolve_config_path() {
+        Ok(p) => p,
+        Err(msg) => bail(ExitCode::ConfigError, "config-error", &msg),
+    };
+
+    if !args.yes {
+        eprint!(
+            "remove account '{}' from {}? [y/N]: ",
+            args.account_id,
+            config_path.display()
+        );
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        let _ = std::io::stdin().lock().read_line(&mut line);
+        let trimmed = line.trim();
+        if !matches!(trimmed, "y" | "Y" | "yes") {
+            println!("aborted");
+            return;
+        }
+    }
+
+    if let Err(e) = config_writer::remove_account(&config_path, &args.account_id) {
+        bail(e.exit_code(), "config-error", &e.to_string());
+    }
+
+    chown_to_scryd(&config_path);
+    println!("account '{}' removed", args.account_id);
     print_restart_hint();
 }
 

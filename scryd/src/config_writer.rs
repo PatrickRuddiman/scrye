@@ -78,6 +78,43 @@ pub fn upsert_account(config_path: &Path, entry: &AccountEntry) -> Result<(), Wr
     Ok(())
 }
 
+/// Atomically remove the `[[accounts]]` entry whose id is
+/// `account_id`. Returns `AccountNotFound` if no such entry exists.
+/// Other entries and operator comments are preserved.
+pub fn remove_account(config_path: &Path, account_id: &str) -> Result<(), WriteError> {
+    let existing = std::fs::read_to_string(config_path)
+        .map_err(|e| WriteError::Read(config_path.to_path_buf(), e))?;
+    let mut doc: DocumentMut = existing
+        .parse()
+        .map_err(|e| WriteError::Parse(config_path.to_path_buf(), e))?;
+
+    let arr = doc
+        .get_mut("accounts")
+        .and_then(|i| i.as_array_of_tables_mut())
+        .ok_or_else(|| WriteError::AccountNotFound {
+            account_id: account_id.to_string(),
+        })?;
+    let mut removed_index: Option<usize> = None;
+    for (i, table) in arr.iter().enumerate() {
+        let id = table.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        if id == account_id {
+            removed_index = Some(i);
+            break;
+        }
+    }
+    let Some(i) = removed_index else {
+        return Err(WriteError::AccountNotFound {
+            account_id: account_id.to_string(),
+        });
+    };
+    arr.remove(i);
+
+    let serialized = doc.to_string();
+    let tmp_path = with_tmp_suffix(config_path);
+    write_atomic(&tmp_path, config_path, serialized.as_bytes())?;
+    Ok(())
+}
+
 /// Atomically replace the `password` of the existing `[[accounts]]`
 /// entry whose id is `account_id`. Returns `AccountNotFound` if no
 /// such entry exists. Other fields and operator comments are
