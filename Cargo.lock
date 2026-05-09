@@ -3384,6 +3384,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "is-terminal",
+ "nix",
  "predicates",
  "regex",
  "rpassword",

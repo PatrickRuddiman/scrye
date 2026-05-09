@@ -53,23 +53,17 @@ pub struct UdsClient {
 }
 
 impl UdsClient {
-    /// Resolve `$XDG_RUNTIME_DIR/scryd/scryd.sock`. Returns
-    /// [`ExitCode::Error`]-shaped error if XDG_RUNTIME_DIR is unset.
+    /// Resolve the socket path: prefer `$XDG_RUNTIME_DIR/scryd/scryd.sock`
+    /// (v0.1.0 per-user path); fall back to `/run/scryd/scryd.sock`
+    /// (v0.2.0 system path) when the runtime-dir socket doesn't exist.
+    /// Returns [`ClientError::DaemonNotRunning`] when neither path exists.
     pub fn from_env() -> Result<Self, ClientError> {
-        let runtime = std::env::var("XDG_RUNTIME_DIR").map_err(|_| {
-            ClientError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "XDG_RUNTIME_DIR is not set",
-            ))
-        })?;
-        if runtime.is_empty() {
-            return Err(ClientError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "XDG_RUNTIME_DIR is empty",
-            )));
+        use scryd::path_resolution::{resolve_socket_path_for, SystemEnv, SYSTEM_SOCKET_PATH};
+        let fallback = std::path::Path::new(SYSTEM_SOCKET_PATH);
+        match resolve_socket_path_for(&SystemEnv, fallback) {
+            Ok(socket_path) => Ok(Self { socket_path }),
+            Err(missing) => Err(ClientError::DaemonNotRunning(missing)),
         }
-        let socket_path = PathBuf::from(runtime).join("scryd").join("scryd.sock");
-        Ok(Self { socket_path })
     }
 
     pub fn at_path(socket_path: impl Into<PathBuf>) -> Self {

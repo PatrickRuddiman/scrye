@@ -359,21 +359,8 @@ fn prompt_with_default(label: &str, default: &str) -> String {
 }
 
 fn resolve_config_path() -> Result<std::path::PathBuf, String> {
-    use std::path::PathBuf;
-    if let Ok(home) = std::env::var("XDG_CONFIG_HOME") {
-        if !home.is_empty() {
-            return Ok(PathBuf::from(home).join("scryd").join("config.toml"));
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return Ok(PathBuf::from(home)
-                .join(".config")
-                .join("scryd")
-                .join("config.toml"));
-        }
-    }
-    Err("XDG_CONFIG_HOME and HOME are both unset".to_string())
+    let euid = nix::unistd::geteuid().as_raw();
+    scryd::path_resolution::resolve_config_path_for(euid, &scryd::path_resolution::SystemEnv)
 }
 
 fn pretty_home(p: &std::path::Path) -> String {
