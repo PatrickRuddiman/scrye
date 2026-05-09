@@ -85,6 +85,16 @@ pub struct AccountCfg {
     pub password: AccountPassword,
     #[serde(default)]
     pub folders: Option<Vec<String>>,
+    /// Whether to wrap the IMAP session in TLS (the production path).
+    /// Defaults to `true`; set to `false` only for local test fixtures
+    /// (e.g. GreenMail) that speak plain IMAP. This is a TLS-or-not
+    /// toggle, not a cert-skip-verify option.
+    #[serde(default = "default_tls")]
+    pub tls: bool,
+}
+
+fn default_tls() -> bool {
+    true
 }
 
 #[derive(Debug, thiserror::Error)]

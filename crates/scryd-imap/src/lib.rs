@@ -17,6 +17,7 @@ pub mod scheduler;
 pub mod sink;
 pub mod state;
 pub mod supervisor;
+pub mod plain;
 pub mod tls;
 pub mod tombstone;
 pub mod uidvalidity;
@@ -40,7 +41,7 @@ pub enum ClientError {
 
 pub use capabilities::Capabilities;
 pub use client::Client;
-pub use connect::login;
+pub use connect::{login, login_plain, login_tls, LoggedIn};
 pub use fetch::{fetch_batch, FETCH_ATTRS};
 pub use idle::{emit_idle_drop, emit_idle_enter, emit_idle_recycle, IDLE_RECYCLE};
 pub use poll::{effective_poll_interval, POLL_INTERVAL_FLOOR};

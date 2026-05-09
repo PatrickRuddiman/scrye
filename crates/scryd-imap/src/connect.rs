@@ -5,20 +5,28 @@
 use scryd_log::{category, log_failure};
 
 use crate::client::Client;
+use crate::plain::{connect_plain, PlainStream};
 use crate::tls::{connect_tls, TlsStream};
 use crate::ClientError;
 
-/// Connect to `host:port`, complete TLS, read the server greeting, and
-/// LOGIN. On any failure path, emits the matching `connect failure` /
+/// Either a TLS-wrapped (production) or plain-TCP (test fixture) IMAP
+/// session. The supervisor matches on this enum to drive the same
+/// state-machine over both stream types.
+pub enum LoggedIn {
+    Tls(Client<TlsStream>),
+    Plain(Client<PlainStream>),
+}
+
+/// Connect over TLS, complete the IMAP greeting, and LOGIN. Production
+/// path. On any failure path, emits the matching `connect failure` /
 /// `tls failure` / `auth rejection` log line tagged with the account id.
-pub async fn login(
+pub async fn login_tls(
     host: &str,
     port: u16,
     user: &str,
     password: &str,
     account_id: &str,
 ) -> Result<Client<TlsStream>, ClientError> {
-    // 1. TCP + TLS handshake.
     let tls = match connect_tls(host, port).await {
         Ok(s) => s,
         Err(ClientError::Connect(msg)) => {
@@ -40,11 +48,7 @@ pub async fn login(
         Err(other) => return Err(other),
     };
 
-    // 2. Build the imap client over the TLS stream.
     let client = async_imap::Client::new(tls);
-
-    // 3. LOGIN. async-imap's `login` returns the Session on success or
-    //    a tuple on failure that we reduce to AuthRejected.
     let session = match client.login(user, password).await {
         Ok(s) => s,
         Err((err, _client)) => {
@@ -59,4 +63,64 @@ pub async fn login(
     };
 
     Ok(Client::from_session(session))
+}
+
+/// Connect over plain TCP and LOGIN. Test-fixture path. Mirrors the
+/// failure-log shape of [`login_tls`] except no `tls failure` branch
+/// is reachable.
+pub async fn login_plain(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    account_id: &str,
+) -> Result<Client<PlainStream>, ClientError> {
+    let stream = match connect_plain(host, port).await {
+        Ok(s) => s,
+        Err(ClientError::Connect(msg)) => {
+            log_failure!(
+                category = category::CONNECT_FAILURE,
+                account_id = %account_id,
+                error = %msg
+            );
+            return Err(ClientError::Connect(msg));
+        }
+        Err(other) => return Err(other),
+    };
+
+    let client = async_imap::Client::new(stream);
+    let session = match client.login(user, password).await {
+        Ok(s) => s,
+        Err((err, _client)) => {
+            let msg = err.to_string();
+            log_failure!(
+                category = category::AUTH_REJECTION,
+                account_id = %account_id,
+                error = %msg
+            );
+            return Err(ClientError::AuthRejected);
+        }
+    };
+
+    Ok(Client::from_session(session))
+}
+
+/// Dispatch to TLS or plain login based on `tls`.
+pub async fn login(
+    host: &str,
+    port: u16,
+    tls: bool,
+    user: &str,
+    password: &str,
+    account_id: &str,
+) -> Result<LoggedIn, ClientError> {
+    if tls {
+        login_tls(host, port, user, password, account_id)
+            .await
+            .map(LoggedIn::Tls)
+    } else {
+        login_plain(host, port, user, password, account_id)
+            .await
+            .map(LoggedIn::Plain)
+    }
 }
