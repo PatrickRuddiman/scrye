@@ -28,6 +28,13 @@ where
         Self { session }
     }
 
+    /// Crate-internal access to the underlying session — needed by
+    /// `crate::fetch::fetch_batch` to consume the FETCH stream and
+    /// produce parsed [`crate::sink::FetchedMessage`] values.
+    pub(crate) fn session_mut(&mut self) -> &mut Session<S> {
+        &mut self.session
+    }
+
     /// Open a folder in EXAMINE (read-only) mode.
     pub async fn examine(&mut self, folder: &str) -> Result<(), ClientError> {
         assert_verb_allowed(&ImapVerb::Examine)?;
