@@ -43,7 +43,9 @@ pub use capabilities::Capabilities;
 pub use client::Client;
 pub use connect::{login, login_plain, login_tls, LoggedIn};
 pub use fetch::{fetch_batch, run_incremental, run_initial_backfill, FETCH_ATTRS};
-pub use idle::{emit_idle_drop, emit_idle_enter, emit_idle_recycle, IDLE_RECYCLE};
+pub use idle::{
+    emit_idle_drop, emit_idle_enter, emit_idle_recycle, run_idle_loop, IDLE_RECYCLE,
+};
 pub use poll::{effective_poll_interval, POLL_INTERVAL_FLOOR};
 pub use credential::{ConfigCredentialFetcher, CredentialFetcher};
 pub use scheduler::{
