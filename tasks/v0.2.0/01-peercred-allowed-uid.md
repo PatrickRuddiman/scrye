@@ -20,8 +20,8 @@ Make the daemon's peercred check accept a configured peer UID via `SCRYD_ALLOWED
 - [x] Create new file `crates/scryd-api/tests/peercred_accept_path.rs`. The test binds a real `tokio::net::UnixListener` in a `tempfile::TempDir`, sets `SCRYD_ALLOWED_UID` to the test process's `getuid()`, calls `peercred::init()`, opens a `UnixStream` from the same process to that socket, runs `check_stream_peer` against the accepted half, asserts `Ok(uid)` with the right uid. A second sub-test sets `SCRYD_ALLOWED_UID` to `getuid() + 1`, runs the same setup, asserts `Err(ApiError::NonOwner)` and that exactly one `NON_OWNER_REJECTION` log record was emitted with `expected_uid` matching the env-var value.
 
 ## Acceptance criteria
-- [x] `cargo test -p scryd-api --test peercred` passes (all four env-var unit tests green) — pending Linux verification (Windows host blocked by pre-existing scryd-search Linux-only deps).
-- [x] `cargo test -p scryd-api --test peercred_accept_path` passes (both real-UDS sub-tests green) — pending Linux verification.
+- [x] `cargo test -p scryd-api --test peercred` passes (7/7 green on Linux including the four new env-var unit tests).
+- [x] `cargo test -p scryd-api --test peercred_accept_path` passes (2/2 green on Linux: real-UDS accept + rejection-log assertions).
 - [x] `git grep -n 'SCRYD_ALLOWED_UID' crates/scryd-api/src/peercred.rs` matches the env-var read site.
 - [x] `git grep -nE 'expected_uid\s*=' crates/scryd-api/src/peercred.rs` matches the log-emission line.
 - [x] `git grep -n 'OnceLock' crates/scryd-api/src/peercred.rs` matches the cache.
