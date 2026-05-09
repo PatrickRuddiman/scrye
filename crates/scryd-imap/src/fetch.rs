@@ -5,7 +5,8 @@
 use futures::{AsyncRead, AsyncWrite, StreamExt};
 
 use crate::client::Client;
-use crate::sink::FetchedMessage;
+use crate::sink::{FetchedMessage, MessageSink, SyncStateUpdate};
+use crate::state::{ConnState, Connection, INCREMENTAL_FETCH_BATCH};
 use crate::verbs::{assert_verb_allowed, ImapVerb};
 use crate::ClientError;
 
@@ -42,6 +43,118 @@ where
         out.push(parse_fetch_row(&fetch, account_id, folder, uidvalidity)?);
     }
     Ok(out)
+}
+
+/// Walk a folder from UID 1 up through the server's UIDNEXT-1, in
+/// `INCREMENTAL_FETCH_BATCH`-sized batches, handing every fetched
+/// message to the sink. Updates `sink.update_sync_state` after each
+/// batch so a SIGKILL mid-walk resumes from a recent watermark on
+/// the next start.
+pub async fn run_initial_backfill<S>(
+    conn: &mut Connection,
+    client: &mut Client<S>,
+    sink: &dyn MessageSink,
+) -> Result<(), ClientError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + std::fmt::Debug,
+{
+    let meta = client.examine_meta(&conn.folder).await?;
+    let server_uidvalidity = meta.uid_validity.ok_or_else(|| {
+        ClientError::Server(format!(
+            "EXAMINE {} did not report UIDVALIDITY",
+            conn.folder
+        ))
+    })?;
+    let target = meta.uid_next.map(|n| n.saturating_sub(1));
+
+    conn.enter_backfill(target);
+
+    let mut lo: u32 = 1;
+    let mut max_uid_seen: u32 = 0;
+    loop {
+        if let Some(t) = target {
+            if t == 0 || lo > t {
+                break;
+            }
+        }
+        let hi = lo.saturating_add(INCREMENTAL_FETCH_BATCH - 1);
+        let range = format!("{lo}:{hi}");
+        let batch = fetch_batch(client, &range, &conn.account_id, &conn.folder, server_uidvalidity).await?;
+        for fetched in batch {
+            let observed = fetched.server_uid;
+            if observed > max_uid_seen {
+                max_uid_seen = observed;
+            }
+            sink.submit(fetched).await?;
+            conn.advance_backfill(observed);
+        }
+        sink.update_sync_state(
+            &conn.account_id,
+            &conn.folder,
+            SyncStateUpdate {
+                uidvalidity: Some(server_uidvalidity),
+                last_seen_uid: Some(max_uid_seen),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+        if target.map(|t| hi >= t).unwrap_or(false) {
+            break;
+        }
+        lo = hi.saturating_add(1);
+    }
+
+    conn.state = ConnState::Idling;
+    Ok(())
+}
+
+/// Catch up on messages newer than `last_seen_uid` for the connection's
+/// folder. Triggered after IDLE wake / poll tick. UIDVALIDITY change
+/// routes the caller to `run_initial_backfill` via
+/// [`crate::uidvalidity::handle_change`].
+pub async fn run_incremental<S>(
+    conn: &mut Connection,
+    client: &mut Client<S>,
+    sink: &dyn MessageSink,
+    last_seen_uid: u32,
+) -> Result<u32, ClientError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + std::fmt::Debug,
+{
+    let meta = client.examine_meta(&conn.folder).await?;
+    let server_uidvalidity = meta.uid_validity.ok_or_else(|| {
+        ClientError::Server(format!(
+            "EXAMINE {} did not report UIDVALIDITY",
+            conn.folder
+        ))
+    })?;
+
+    let from = last_seen_uid.saturating_add(1);
+    let range = format!("{from}:*");
+    conn.state = ConnState::Fetching;
+    let batch = fetch_batch(client, &range, &conn.account_id, &conn.folder, server_uidvalidity).await?;
+
+    let mut max_uid_seen = last_seen_uid;
+    for fetched in batch {
+        if fetched.server_uid > max_uid_seen {
+            max_uid_seen = fetched.server_uid;
+        }
+        sink.submit(fetched).await?;
+    }
+    if max_uid_seen > last_seen_uid {
+        sink.update_sync_state(
+            &conn.account_id,
+            &conn.folder,
+            SyncStateUpdate {
+                uidvalidity: Some(server_uidvalidity),
+                last_seen_uid: Some(max_uid_seen),
+                ..Default::default()
+            },
+        )
+        .await?;
+    }
+    Ok(max_uid_seen)
 }
 
 /// Map a single async-imap `Fetch` into a [`FetchedMessage`]. Pulled

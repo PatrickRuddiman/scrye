@@ -6,3 +6,4 @@
 #![allow(dead_code)]
 
 pub mod greenmail;
+pub mod test_sink;

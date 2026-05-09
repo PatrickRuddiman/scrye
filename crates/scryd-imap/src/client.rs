@@ -11,6 +11,16 @@ use crate::capabilities::Capabilities;
 use crate::verbs::{assert_verb_allowed, ImapVerb};
 use crate::ClientError;
 
+/// Subset of `Mailbox` the fetch loops care about. `exists` is the
+/// total message count; `uid_validity` and `uid_next` come straight
+/// from the EXAMINE response.
+#[derive(Debug, Clone, Copy)]
+pub struct MailboxMeta {
+    pub exists: u32,
+    pub uid_validity: Option<u32>,
+    pub uid_next: Option<u32>,
+}
+
 pub struct Client<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + std::fmt::Debug,
@@ -43,6 +53,23 @@ where
             .await
             .map(|_| ())
             .map_err(|e| ClientError::Server(e.to_string()))
+    }
+
+    /// EXAMINE that returns the mailbox metadata (UIDVALIDITY, UIDNEXT,
+    /// EXISTS) the fetch loops need to drive backfill / incremental
+    /// state machines.
+    pub async fn examine_meta(&mut self, folder: &str) -> Result<MailboxMeta, ClientError> {
+        assert_verb_allowed(&ImapVerb::Examine)?;
+        let mb = self
+            .session
+            .examine(folder)
+            .await
+            .map_err(|e| ClientError::Server(e.to_string()))?;
+        Ok(MailboxMeta {
+            exists: mb.exists,
+            uid_validity: mb.uid_validity,
+            uid_next: mb.uid_next,
+        })
     }
 
     /// Run CAPABILITY and return the parsed flag set. async-imap exposes
