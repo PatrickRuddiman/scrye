@@ -2,11 +2,11 @@
 
 **Turn your email into a searchable dataset AI agents can read.**
 
-scryd is a per-user, read-only IMAP indexer + search daemon. It connects to
-your mail account, mirrors the messages into a local SQLite store +
-[witchcraft](https://github.com/dropbox/witchcraft)-backed semantic index, and
-exposes a small HTTP API on a Unix-domain socket that local CLIs and AI agents
-query against.
+scryd is a read-only IMAP indexer + search daemon for Linux. It connects
+to your mail account, mirrors the messages into a local SQLite store +
+[witchcraft](https://github.com/dropbox/witchcraft)-backed semantic index,
+and exposes a small HTTP API on a Unix-domain socket that local CLIs and
+AI agents query against.
 
 The point: an agent that needs context about a project, a person, a thread,
 or a contract can pose a natural-language question and get back the
@@ -17,18 +17,20 @@ ever holding your mailbox credential.
 
 - **Indexes mail in the background.** scryd connects to IMAP using an app
   password, fetches messages, parses MIME, converts HTML to Markdown, and
-  writes everything into `~/.local/share/scryd/`.
+  writes everything into `/var/lib/scryd/`.
 - **Serves search over a local socket.** Agents and CLIs talk to scryd over
-  `$XDG_RUNTIME_DIR/scryd/scryd.sock`. The socket is mode `0700` and
-  peercred-checked: only the daemon's own user can query it.
+  `/run/scryd/scryd.sock`. The socket is peercred-checked: only the
+  operator's UID can connect.
 - **Three search modes.** `fulltext` (FTS5 keyword), `semantic` (T5 XTR
   embeddings via witchcraft), and `hybrid` (RRF fusion of the two).
 - **Filters by sender, folder, account, and date range.** Same filter chain
   in every mode.
 - **Returns full message bodies, threads, and raw `.eml` source** for the
   matches the agent needs to read.
-- **Stores credentials only in `config.toml`** at mode `0600`. Agents that
-  call scryd never see the IMAP password, only the search results.
+- **Keeps the IMAP credential out of the operator's reach.** The daemon
+  runs under a dedicated `scryd` system user; `/etc/scryd/config.toml` is
+  mode 0600 owned by that user. The operator's shell, agents, and MCP
+  servers can search but cannot read the password.
 
 ## Why an agent should use it
 
@@ -54,37 +56,34 @@ ranked snippets with stable IDs you can fetch the full context for.
 
 ## Install
 
-Linux + macOS only in v0.1.0. Releases ship as per-arch tarballs on the
+scryd v0.2.0 ships Linux x86_64 / aarch64 tarballs on the
 [Releases page](https://github.com/PatrickRuddiman/scrye/releases).
-
-### Linux
 
 ```sh
 tar -xzf scryd-vX.Y.Z-x86_64-linux.tar.gz
 cd scryd-vX.Y.Z-x86_64-linux
-./install.sh
-scryd add-account
-systemctl --user enable --now scryd
+sudo ./install.sh
 ```
 
-`install.sh` is a per-user installer (refuses to run as root). It places the
-binary in `~/.local/bin/`, the systemd user unit in
-`~/.config/systemd/user/`, and runs `scryd-fetch-weights` to download the T5
-weights into `$XDG_DATA_HOME/scryd/assets/`.
+The installer creates a `scryd` system user, lays out
+`/etc/scryd`, `/var/lib/scryd`, `/run/scryd`, renders the systemd unit,
+fetches the T5 weights, and starts the daemon. See
+[ops/README.install.md](ops/README.install.md) for the full walkthrough
+(sudo install, isolation properties, daily-use commands, journalctl
+recipes, uninstall, v0.1.0 → v0.2.0 migration).
 
-### macOS
+## Isolation
 
-```sh
-tar -xzf scryd-vX.Y.Z-aarch64-macos.tar.gz
-cd scryd-vX.Y.Z-aarch64-macos
-mkdir -p ~/.local/bin && cp scryd scryd-fetch-weights ~/.local/bin/
-~/.local/bin/scryd-fetch-weights
-~/.local/bin/scryd add-account
-~/.local/bin/scryd serve &
-```
-
-A launchd plist is a v0.2.0 follow-up; for now run `scryd serve` in the
-foreground or wrap it in your shell of choice.
+The daemon runs as a dedicated `scryd` system user, which is what makes
+the credential isolation possible: `/etc/scryd/config.toml` is mode
+0600 owned by `scryd:scryd`, so any process running as the operator's
+UID — interactive shells, agents, MCP servers — gets `EACCES` when it
+tries to open the file. The operator still reaches the daemon over
+`/run/scryd/scryd.sock` (group-readable to the operator), which is how
+search queries arrive without exposing the IMAP password. See
+[ops/README.install.md](ops/README.install.md#isolation-properties)
+for the full table and [scryd-spec-v0.2.0.md](scryd-spec-v0.2.0.md)
+for the threat model.
 
 ## Use
 
@@ -120,16 +119,17 @@ GET /message/<id>/raw
 
 ```
    IMAP server  ──IDLE/poll──▶  scryd  ──UDS──▶  CLI / agent
-                                  │
+                                  │              (operator UID)
                        ┌──────────┴──────────┐
                        ▼                     ▼
                 meta.sqlite +           witchcraft
                 raw .eml store      (T5 XTR embeddings)
+                  (scryd:scryd UID)
 ```
 
-One binary, one user-owned config, one user-owned data directory. No
-system-wide privilege; multiple users on the same host run their own scryd
-instances in isolation.
+One binary, one system-wide config under `scryd:scryd`, one
+operator-allowed socket. v0.2.0 is single-operator per host; multi-
+operator support is deferred to v0.3.0.
 
 ## Status
 
