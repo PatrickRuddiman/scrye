@@ -103,8 +103,8 @@ pub enum ConfigError {
     NoFolders(String),
     #[error("duplicate account id `{0}`")]
     DuplicateAccountId(String),
-    #[error("config file mode is too permissive: expected 0600, got {0:o}")]
-    PermissionTooOpen(u32),
+    #[error("config file {path} mode is too permissive: expected 0600, got {mode_seen:o}")]
+    PermissionInvariant { path: PathBuf, mode_seen: u32 },
     #[error("XDG_CONFIG_HOME and HOME are both unset; cannot resolve config path")]
     XdgUnresolvable,
 }
@@ -120,6 +120,7 @@ impl Config {
             }
             Err(e) => return Err(ConfigError::Read(path.to_path_buf(), e)),
         };
+        crate::permissions::assert_mode_0600(path)?;
         let cfg: Config = toml::from_str(&raw)
             .map_err(|e| ConfigError::Parse(path.to_path_buf(), e))?;
         cfg.validate()?;

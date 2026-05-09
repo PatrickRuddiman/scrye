@@ -199,3 +199,30 @@ fn empty_config_uses_defaults() {
     assert!(cfg.indexers.semantic);
     assert!(cfg.accounts.is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn load_accepts_mode_0600_config() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = write_config(MIN_VALID);
+    std::fs::set_permissions(f.path(), std::fs::Permissions::from_mode(0o600))
+        .expect("chmod 0600");
+    let cfg = Config::load(f.path()).expect("loads");
+    assert_eq!(cfg.accounts.len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn load_refuses_world_readable_config() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = write_config(MIN_VALID);
+    std::fs::set_permissions(f.path(), std::fs::Permissions::from_mode(0o644))
+        .expect("chmod 0644");
+    match Config::load(f.path()) {
+        Err(ConfigError::PermissionInvariant { path, mode_seen }) => {
+            assert_eq!(path.as_path(), f.path());
+            assert_eq!(mode_seen, 0o644);
+        }
+        other => panic!("expected PermissionInvariant, got {other:?}"),
+    }
+}

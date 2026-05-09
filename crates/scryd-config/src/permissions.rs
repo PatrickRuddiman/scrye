@@ -14,7 +14,10 @@ pub fn assert_mode_0600(path: &Path) -> Result<(), ConfigError> {
         .map_err(|e| ConfigError::Read(path.to_path_buf(), e))?;
     let mode = meta.mode() & 0o777;
     if mode != 0o600 {
-        return Err(ConfigError::PermissionTooOpen(mode));
+        return Err(ConfigError::PermissionInvariant {
+            path: path.to_path_buf(),
+            mode_seen: mode,
+        });
     }
     Ok(())
 }
