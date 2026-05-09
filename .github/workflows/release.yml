@@ -72,6 +72,11 @@ jobs:
           fi
         shell: bash
 
+      - name: install.sh smoke test
+        if: matrix.cross == false
+        run: bash tests/install_sh.sh
+        shell: bash
+
       - name: package tarball
         id: package
         run: |

@@ -69,16 +69,24 @@ if [[ -z "$ALLOWED_UID" ]]; then
 fi
 
 V01_FINDINGS=()
+V01_FILES=()
 detect_v01_users() {
-    local entry user home
+    local user home
     while IFS=: read -r user _ uid _ _ home _; do
         if (( uid < 1000 || uid >= 65534 )); then
             continue
         fi
-        if [[ -e "$home/.local/bin/scryd" \
-           || -e "$home/.local/bin/scryd-fetch-weights" \
-           || -e "$home/.config/systemd/user/scryd.service" \
-           || -e "$home/.config/scryd/config.toml" ]]; then
+        local found_for_user=0
+        for f in "$home/.local/bin/scryd" \
+                 "$home/.local/bin/scryd-fetch-weights" \
+                 "$home/.config/systemd/user/scryd.service" \
+                 "$home/.config/scryd/config.toml"; do
+            if [[ -e "$f" ]]; then
+                V01_FILES+=("$f")
+                found_for_user=1
+            fi
+        done
+        if [[ $found_for_user -eq 1 ]]; then
             V01_FINDINGS+=("$user:$home")
         fi
     done < <(getent passwd)
@@ -90,6 +98,9 @@ if [[ ${#V01_FINDINGS[@]} -gt 0 && $REMOVE_V01_DATA -eq 0 ]]; then
     echo "scryd install: detected v0.1.0 per-user install on this host:" >&2
     for entry in "${V01_FINDINGS[@]}"; do
         echo "  - ${entry%%:*}  (home: ${entry#*:})" >&2
+    done
+    for f in "${V01_FILES[@]}"; do
+        echo "    $f" >&2
     done
     cat >&2 <<'EOF'
 

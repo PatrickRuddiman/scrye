@@ -42,7 +42,7 @@ if getent passwd scryd >/dev/null; then
     removed=$((removed + 1))
 fi
 
-systemctl daemon-reload
+systemctl daemon-reload 2>/dev/null || true
 
 if [[ $removed -eq 0 ]]; then
     echo "scryd uninstall: nothing was installed."
