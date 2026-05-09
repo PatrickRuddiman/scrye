@@ -3562,6 +3562,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "hex",
+ "scryd-api",
  "scryd-config",
  "scryd-imap",
  "scryd-log",
@@ -3574,6 +3575,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

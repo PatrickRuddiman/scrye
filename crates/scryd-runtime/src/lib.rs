@@ -9,6 +9,7 @@
 //! testable seam (XDG paths, preflight invariants, sink wiring).
 
 pub mod preflight;
+pub mod serve;
 pub mod sink;
 pub mod xdg;
 
@@ -32,5 +33,6 @@ pub enum RuntimeError {
 }
 
 pub use preflight::{run as run_preflight, PreflightOk};
+pub use serve::{serve, serve_init, serve_run, ServeContext};
 pub use sink::StorageMessageSink;
 pub use xdg::{assets_dir, config_path, data_dir, runtime_dir};

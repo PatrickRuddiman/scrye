@@ -113,11 +113,17 @@ fn main() {
 }
 
 fn run_serve() {
-    // Tokio runtime + scryd_runtime::serve — task 16's serve() is
-    // partially deferred (the live IMAP scheduler integration), so v1
-    // exits cleanly with a clear message rather than panicking.
-    eprintln!("scryd serve: live integration deferred — start the partial daemon manually for development");
-    std::process::exit(ExitCode::Error.into_raw());
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => bail(ExitCode::Error, "error", &e.to_string()),
+    };
+    match rt.block_on(scryd_runtime::serve()) {
+        Ok(()) => std::process::exit(0),
+        Err(e) => bail(ExitCode::Error, "error", &e.to_string()),
+    }
 }
 
 fn run_reindex() {
