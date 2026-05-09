@@ -222,6 +222,14 @@ fn run_add_account(args: AddAccountArgs) {
     use std::io::{BufRead, Read, Write};
     use std::path::PathBuf;
 
+    if cli_effective_euid() != 0 {
+        bail(
+            ExitCode::BadInput,
+            "bad-input",
+            "add-account requires root (try: sudo scryd add-account ...)",
+        );
+    }
+
     let id_re = regex::Regex::new(r"^[a-z0-9_-]+$").expect("valid regex");
 
     // Resolve fields from flags or interactive prompts.
@@ -281,48 +289,65 @@ fn run_add_account(args: AddAccountArgs) {
         bail(e.exit_code(), "config-error", &e.to_string());
     }
 
+    chown_to_scryd(&config_path);
+
     let display_path = pretty_home(&config_path);
     println!("account '{id}' saved to {display_path}");
 
-    // Try to reconcile if the daemon is running. Daemon-not-running is
-    // expected during initial setup — print a hint and exit 0.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
-        let client = match uds_client::UdsClient::from_env() {
-            Ok(c) => c,
-            Err(_) => {
-                println!("start the daemon: systemctl --user start scryd");
-                return;
-            }
-        };
-        match client.post("/internal/reconcile").await {
-            Ok(resp) if resp.status == 202 => {
-                println!("daemon reloaded; account is now syncing");
-            }
-            Ok(resp) => {
-                eprintln!(
-                    "scryd: daemon-rejected: status {} from /internal/reconcile",
-                    resp.status
-                );
-                std::process::exit(ExitCode::DaemonRejected.into_raw());
-            }
-            Err(uds_client::ClientError::DaemonNotRunning(_)) => {
-                println!("start the daemon: systemctl --user start scryd");
-            }
-            Err(e) => {
-                eprintln!("scryd: error: {e}");
-                std::process::exit(ExitCode::Error.into_raw());
-            }
-        }
-    });
+    print_restart_hint();
 
     let _ = std::path::PathBuf::new(); // silence unused-import for tests
     let _: PathBuf = config_path;
     let _: &mut dyn Write = &mut std::io::stdout();
     let _: &mut dyn BufRead = &mut std::io::BufReader::new(std::io::empty());
+}
+
+/// Effective uid for the elevation check. Honors `SCRYD_CLI_FAKE_EUID`
+/// when set so integration tests can exercise the elevation gate
+/// without actually running as root. The env var is test-only and
+/// should never be set in production.
+fn cli_effective_euid() -> u32 {
+    if let Ok(s) = std::env::var("SCRYD_CLI_FAKE_EUID") {
+        if let Ok(v) = s.parse::<u32>() {
+            return v;
+        }
+    }
+    nix::unistd::geteuid().as_raw()
+}
+
+/// Chown the freshly-written config to `scryd:scryd` so the daemon
+/// (running under that uid) can read it. Silently no-ops in test
+/// environments where the `scryd` system user does not exist.
+fn chown_to_scryd(path: &std::path::Path) {
+    if let Ok(Some(user)) = nix::unistd::User::from_name("scryd") {
+        let _ = nix::unistd::chown(path, Some(user.uid), Some(user.gid));
+    }
+}
+
+/// Probe the daemon's UDS and print the appropriate hint:
+///   - daemon reachable → `apply changes: sudo systemctl restart scryd`
+///   - daemon not running → `apply changes: sudo systemctl start scryd`
+fn print_restart_hint() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let reachable = rt.block_on(async {
+        let client = match uds_client::UdsClient::from_env() {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        match client.get("/accounts").await {
+            Ok(_) => true,
+            Err(uds_client::ClientError::DaemonNotRunning(_)) => false,
+            Err(_) => true,
+        }
+    });
+    if reachable {
+        println!("apply changes: sudo systemctl restart scryd");
+    } else {
+        println!("apply changes: sudo systemctl start scryd");
+    }
 }
 
 fn prompt_required(label: &str) -> String {

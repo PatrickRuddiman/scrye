@@ -74,6 +74,7 @@ fn flag_path_writes_config_and_dispatches_reconcile() {
 
         let output = tokio::task::spawn_blocking(move || {
             scryd()
+                .env("SCRYD_CLI_FAKE_EUID", "0")
                 .env("XDG_RUNTIME_DIR", &runtime_path)
                 .env("HOME", &home_path)
                 .env_remove("XDG_CONFIG_HOME")
@@ -105,7 +106,7 @@ fn flag_path_writes_config_and_dispatches_reconcile() {
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("saved to"), "{stdout}");
-        assert!(stdout.contains("daemon reloaded"), "{stdout}");
+        assert!(stdout.contains("sudo systemctl restart scryd"), "{stdout}");
 
         let config_path = home.path().join(".config/scryd/config.toml");
         assert!(config_path.exists(), "config.toml must exist");
@@ -141,6 +142,7 @@ folders = ["INBOX"]
 
     // Re-run add-account for the same id with a new password.
     let output = scryd()
+        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env("HOME", home.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -179,6 +181,7 @@ fn missing_required_flag_in_non_interactive_path_exits_bad_input() {
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
     let output = scryd()
+        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -208,6 +211,7 @@ fn invalid_account_id_regex_rejected_with_bad_input() {
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
     let output = scryd()
+        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -230,12 +234,79 @@ fn invalid_account_id_regex_rejected_with_bad_input() {
 }
 
 #[test]
-fn add_account_without_running_daemon_still_writes_config_and_prints_hint() {
+fn add_account_without_root_exits_bad_input() {
+    let home = TempDir::new().unwrap();
+    let runtime = TempDir::new().unwrap();
+    let output = scryd()
+        .env("SCRYD_CLI_FAKE_EUID", "1000")
+        .env("HOME", home.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env_remove("XDG_CONFIG_HOME")
+        .args([
+            "add-account",
+            "--account-id",
+            "primary",
+            "--host",
+            "imap.example.com",
+            "--user",
+            "alice@example.com",
+            "--password-stdin",
+            "--folders",
+            "INBOX",
+        ])
+        .write_stdin("hunter2\n")
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("requires root"), "stderr was: {stderr}");
+}
+
+#[test]
+fn add_account_with_root_writes_config_and_prints_restart_hint() {
+    block_on(async {
+        let (runtime_dir, _stop) = spawn_fake_reconcile(RECONCILE_OK_BODY).await;
+        let home = TempDir::new().unwrap();
+        let runtime_path = runtime_dir.path().to_path_buf();
+        let home_path = home.path().to_path_buf();
+
+        let output = tokio::task::spawn_blocking(move || {
+            scryd()
+                .env("SCRYD_CLI_FAKE_EUID", "0")
+                .env("XDG_RUNTIME_DIR", &runtime_path)
+                .env("HOME", &home_path)
+                .env_remove("XDG_CONFIG_HOME")
+                .args([
+                    "add-account",
+                    "--account-id",
+                    "primary",
+                    "--host",
+                    "imap.example.com",
+                    "--user",
+                    "alice@example.com",
+                    "--password-stdin",
+                    "--folders",
+                    "INBOX",
+                ])
+                .write_stdin("hunter2\n")
+                .output()
+                .expect("run")
+        })
+        .await
+        .unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("sudo systemctl restart scryd"), "{stdout}");
+    });
+}
+
+#[test]
+fn add_account_with_root_and_no_daemon_prints_start_hint() {
     let runtime = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
-    // No socket file at runtime/scryd/scryd.sock — daemon "not running".
 
     let output = scryd()
+        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env("HOME", home.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -254,9 +325,7 @@ fn add_account_without_running_daemon_still_writes_config_and_prints_hint() {
         .write_stdin("hunter2\n")
         .output()
         .expect("run");
-
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("saved to"), "{stdout}");
-    assert!(stdout.contains("systemctl --user start scryd"), "{stdout}");
+    assert!(stdout.contains("sudo systemctl start scryd"), "{stdout}");
 }
