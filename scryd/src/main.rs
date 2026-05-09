@@ -28,6 +28,10 @@ enum Verb {
     #[command(name = "add-account")]
     AddAccount(AddAccountArgs),
 
+    /// Rotate the IMAP credential for a configured account.
+    #[command(name = "rotate-password", about = "Rotate the IMAP credential for a configured account")]
+    RotatePassword(RotatePasswordArgs),
+
     /// Trigger a full reindex on the running daemon.
     Reindex,
 
@@ -54,6 +58,13 @@ struct AddAccountArgs {
     password_stdin: bool,
     #[arg(long, value_delimiter = ',')]
     folders: Option<Vec<String>>,
+}
+
+#[derive(clap::Args, Debug)]
+struct RotatePasswordArgs {
+    account_id: String,
+    #[arg(long = "password-stdin")]
+    password_stdin: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -85,6 +96,7 @@ fn main() {
         Verb::Reindex => run_reindex(),
         Verb::Search(args) => run_search(args),
         Verb::AddAccount(args) => run_add_account(args),
+        Verb::RotatePassword(args) => run_rotate_password(args),
     }
 }
 
@@ -300,6 +312,51 @@ fn run_add_account(args: AddAccountArgs) {
     let _: PathBuf = config_path;
     let _: &mut dyn Write = &mut std::io::stdout();
     let _: &mut dyn BufRead = &mut std::io::BufReader::new(std::io::empty());
+}
+
+fn run_rotate_password(args: RotatePasswordArgs) {
+    use std::io::Read;
+
+    if cli_effective_euid() != 0 {
+        bail(
+            ExitCode::BadInput,
+            "bad-input",
+            "rotate-password requires root (try: sudo scryd rotate-password ...)",
+        );
+    }
+
+    let id_re = regex::Regex::new(r"^[a-z0-9_-]+$").expect("valid regex");
+    if !id_re.is_match(&args.account_id) {
+        bail(
+            ExitCode::BadInput,
+            "bad-input",
+            &format!("account id `{}` must match ^[a-z0-9_-]+$", args.account_id),
+        );
+    }
+
+    let password = if args.password_stdin {
+        let mut buf = String::new();
+        std::io::stdin().lock().read_to_string(&mut buf).unwrap_or(0);
+        buf.trim_end_matches(['\n', '\r']).to_string()
+    } else {
+        rpassword::prompt_password("new app password: ").unwrap_or_default()
+    };
+    if password.is_empty() {
+        bail(ExitCode::BadInput, "bad-input", "password cannot be empty");
+    }
+
+    let config_path = match resolve_config_path() {
+        Ok(p) => p,
+        Err(msg) => bail(ExitCode::ConfigError, "config-error", &msg),
+    };
+
+    if let Err(e) = config_writer::rotate_password(&config_path, &args.account_id, &password) {
+        bail(e.exit_code(), "config-error", &e.to_string());
+    }
+
+    chown_to_scryd(&config_path);
+    println!("password rotated for '{}'", args.account_id);
+    print_restart_hint();
 }
 
 /// Effective uid for the elevation check. Honors `SCRYD_CLI_FAKE_EUID`

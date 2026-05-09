@@ -31,11 +31,16 @@ pub enum WriteError {
     Rename(#[source] std::io::Error),
     #[error("create config directory: {0}")]
     Mkdir(#[source] std::io::Error),
+    #[error("no account with id `{account_id}` in config")]
+    AccountNotFound { account_id: String },
 }
 
 impl WriteError {
     pub fn exit_code(&self) -> ExitCode {
-        ExitCode::ConfigError
+        match self {
+            Self::AccountNotFound { .. } => ExitCode::BadInput,
+            _ => ExitCode::ConfigError,
+        }
     }
 }
 
@@ -66,6 +71,48 @@ pub fn upsert_account(config_path: &Path, entry: &AccountEntry) -> Result<(), Wr
         .map_err(|e| WriteError::Parse(config_path.to_path_buf(), e))?;
 
     upsert_into_doc(&mut doc, entry);
+
+    let serialized = doc.to_string();
+    let tmp_path = with_tmp_suffix(config_path);
+    write_atomic(&tmp_path, config_path, serialized.as_bytes())?;
+    Ok(())
+}
+
+/// Atomically replace the `password` of the existing `[[accounts]]`
+/// entry whose id is `account_id`. Returns `AccountNotFound` if no
+/// such entry exists. Other fields and operator comments are
+/// preserved byte-for-byte.
+pub fn rotate_password(
+    config_path: &Path,
+    account_id: &str,
+    new_password: &str,
+) -> Result<(), WriteError> {
+    let existing = std::fs::read_to_string(config_path)
+        .map_err(|e| WriteError::Read(config_path.to_path_buf(), e))?;
+    let mut doc: DocumentMut = existing
+        .parse()
+        .map_err(|e| WriteError::Parse(config_path.to_path_buf(), e))?;
+
+    let arr = doc
+        .get_mut("accounts")
+        .and_then(|i| i.as_array_of_tables_mut())
+        .ok_or_else(|| WriteError::AccountNotFound {
+            account_id: account_id.to_string(),
+        })?;
+    let mut found = false;
+    for table in arr.iter_mut() {
+        let id = table.get("id").and_then(|i| i.as_str()).unwrap_or("");
+        if id == account_id {
+            table["password"] = value(new_password);
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        return Err(WriteError::AccountNotFound {
+            account_id: account_id.to_string(),
+        });
+    }
 
     let serialized = doc.to_string();
     let tmp_path = with_tmp_suffix(config_path);
