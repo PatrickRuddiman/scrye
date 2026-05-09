@@ -158,15 +158,22 @@ sed -e "s/__UID__/$ALLOWED_UID/g" -e "s/__USER__/$ALLOWED_USER/g" \
     "$SCRIPT_DIR/scryd.service.in" > /etc/systemd/system/scryd.service
 chmod 0644 /etc/systemd/system/scryd.service
 
+install -d -m 0755 /etc/tmpfiles.d
 sed -e "s/__USER__/$ALLOWED_USER/g" \
     "$SCRIPT_DIR/scryd.tmpfiles.in" > /etc/tmpfiles.d/scryd.conf
 chmod 0644 /etc/tmpfiles.d/scryd.conf
 
-if ! command -v systemd-tmpfiles >/dev/null 2>&1; then
-    echo "scryd install: systemd-tmpfiles not found — is this host running systemd?" >&2
-    exit 1
+if [[ $SKIP_SYSTEMCTL -eq 0 ]]; then
+    if ! command -v systemd-tmpfiles >/dev/null 2>&1; then
+        echo "scryd install: systemd-tmpfiles not found — is this host running systemd?" >&2
+        exit 1
+    fi
+    systemd-tmpfiles --create /etc/tmpfiles.d/scryd.conf
+else
+    # No systemd available (test env). Provision /run/scryd manually
+    # mirroring what tmpfiles.d would do.
+    install -d -m 0750 -o scryd -g "$ALLOWED_USER" /run/scryd
 fi
-systemd-tmpfiles --create /etc/tmpfiles.d/scryd.conf
 
 if [[ $SKIP_WEIGHTS -eq 0 ]]; then
     sudo -u scryd /usr/local/bin/scryd-fetch-weights --target /var/lib/scryd/assets/

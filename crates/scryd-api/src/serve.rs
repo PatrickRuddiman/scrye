@@ -5,6 +5,8 @@
 use std::future::Future;
 
 use axum::Router;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto::Builder;
 use tokio::net::UnixListener;
 
 use crate::peercred::{check_stream_peer, init as init_peercred};
@@ -28,14 +30,7 @@ pub async fn serve(
     };
     tokio::pin!(shutdown_signal);
 
-    // Use axum's internal serving primitives via tower::Service. axum's
-    // `serve` function expects a TCP-friendly `Listener` impl that
-    // tokio::net::UnixListener doesn't directly satisfy on every axum
-    // version, so we accept manually and hand each connection to the
-    // router via tower::Service.
-    use tower::Service;
-    let app = router.into_make_service();
-    let mut app = app;
+    let svc = router.into_make_service();
 
     loop {
         tokio::select! {
@@ -49,15 +44,34 @@ pub async fn serve(
                     }
                 };
                 if check_stream_peer(&stream).is_err() {
-                    // Reject and move on; the log line was already emitted.
+                    // Rejection log was already emitted.
                     continue;
                 }
-                // Hand off to axum's per-connection service. The actual
-                // hyper integration over a UnixStream is wired up in
-                // task 18 once routes exist; for now we drop the stream
-                // (no routes, nothing to serve).
-                let _service = app.call(()).await;
-                drop(stream);
+                let mut svc = svc.clone();
+                tokio::spawn(async move {
+                    use tower::Service as _;
+                    let tower_svc = match svc.call(()).await {
+                        Ok(s) => s,
+                        Err(_) => return,
+                    };
+                    let io = TokioIo::new(stream);
+                    let hyper_svc = hyper::service::service_fn(
+                        move |req: hyper::Request<hyper::body::Incoming>| {
+                            let mut tower_svc = tower_svc.clone();
+                            async move {
+                                let req = req.map(axum::body::Body::new);
+                                tower::Service::<axum::http::Request<axum::body::Body>>::call(
+                                    &mut tower_svc,
+                                    req,
+                                )
+                                .await
+                            }
+                        },
+                    );
+                    let _ = Builder::new(TokioExecutor::new())
+                        .serve_connection(io, hyper_svc)
+                        .await;
+                });
             }
         }
     }

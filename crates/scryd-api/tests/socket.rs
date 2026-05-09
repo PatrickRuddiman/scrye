@@ -7,7 +7,7 @@ use scryd_api::{bind, ApiError};
 use tempfile::TempDir;
 
 #[tokio::test]
-async fn bind_creates_socket_at_mode_0600() {
+async fn bind_creates_socket_at_mode_0660() {
     let dir = TempDir::new().unwrap();
     let scryd_dir = dir.path().join("scryd");
 
@@ -15,7 +15,9 @@ async fn bind_creates_socket_at_mode_0600() {
 
     let sock = scryd_dir.join("scryd.sock");
     let mode = std::fs::metadata(&sock).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "socket file mode = {:o}", mode);
+    // v0.2.0: socket is mode 0660; the directory's group controls who
+    // can connect. v0.1.0 had 0600.
+    assert_eq!(mode, 0o660, "socket file mode = {:o}", mode);
 }
 
 #[tokio::test]

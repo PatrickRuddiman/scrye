@@ -28,12 +28,14 @@ pub fn run() -> Result<PreflightOk, RuntimeError> {
     let assets = xdg::assets_dir()?;
 
     // The runtime dir's parent ($XDG_RUNTIME_DIR) is what we audit; the
-    // socket subdir is created at bind time. We assert mode 0700 on the
-    // parent on Unix.
+    // socket subdir is created at bind time. v0.1.0 had the parent
+    // owned by the operator at mode 0700; v0.2.0 has it owned by the
+    // scryd system uid at mode 0750 (the operator gets group access).
+    // Either layout is acceptable; we just assert the directory exists.
     let runtime_parent = runtime
         .parent()
         .ok_or_else(|| RuntimeError::UnresolvableXdgPath("runtime_dir parent"))?;
-    assert_dir(runtime_parent, 0o700, "runtime dir parent")?;
+    assert_dir_exists(runtime_parent, "runtime dir parent")?;
 
     // Config file: must exist, mode 0600.
     assert_file_mode(&config, 0o600, "config")?;
@@ -55,6 +57,26 @@ pub fn run() -> Result<PreflightOk, RuntimeError> {
         data_dir: data,
         assets_dir: assets,
     })
+}
+
+fn assert_dir_exists(path: &Path, label: &str) -> Result<(), RuntimeError> {
+    let meta = std::fs::metadata(path).map_err(|e| {
+        log_failure!(
+            category = category::CONFIG_PERMISSION_ERROR,
+            path = %path.display(),
+            error = %e,
+            label = label
+        );
+        RuntimeError::Io(e)
+    })?;
+    if !meta.is_dir() {
+        let reason = format!("{label}: not a directory");
+        return Err(RuntimeError::PermissionInvariant {
+            path: path.to_path_buf(),
+            reason,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

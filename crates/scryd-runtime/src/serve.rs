@@ -56,10 +56,15 @@ pub async fn serve_init() -> Result<ServeContext, RuntimeError> {
     let scheduler_config = Arc::new(Config::load(&cfg_path)?);
     let api_config = Config::load(&cfg_path)?;
 
-    let data = data_dir()?;
-    let scryd_data = data.join("scryd");
+    // data_dir() already returns the scryd-specific path (handles both
+    // v0.1.0 ~/.local/share/scryd/ and v0.2.0 /var/lib/scryd/).
+    let scryd_data = data_dir()?;
     std::fs::create_dir_all(&scryd_data).ok();
     let storage = StorageHandle::open(&scryd_data, 4)?;
+
+    // Seed `accounts` rows from the current config so the FK on
+    // `messages.account_id` doesn't reject the first batch of fetches.
+    let _ = storage.reconcile_from_config(&api_config).await?;
 
     let indexer: Arc<dyn scryd_search::Indexer> = Arc::new(InMemoryIndexer::new());
 

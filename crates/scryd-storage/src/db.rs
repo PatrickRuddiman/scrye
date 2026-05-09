@@ -30,9 +30,7 @@ pub enum StorageError {
 pub fn open(path: &Path) -> Result<Connection, StorageError> {
     let mut conn = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE
-            | OpenFlags::SQLITE_OPEN_CREATE
-            | OpenFlags::SQLITE_OPEN_URI,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
     )
     .map_err(|e| classify_open_error(path, e))?;
 
@@ -43,11 +41,8 @@ pub fn open(path: &Path) -> Result<Connection, StorageError> {
 
 /// Open `meta.sqlite` read-only for the api slice's read pool.
 pub fn open_read_only(path: &Path) -> Result<Connection, StorageError> {
-    let conn = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    )
-    .map_err(|e| classify_open_error(path, e))?;
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| classify_open_error(path, e))?;
 
     // foreign_keys is the only pragma that's meaningful (and harmless) on a
     // read-only connection. WAL was set when the writer opened.
@@ -57,12 +52,12 @@ pub fn open_read_only(path: &Path) -> Result<Connection, StorageError> {
 }
 
 fn set_runtime_pragmas(conn: &Connection) -> Result<(), StorageError> {
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(StorageError::Pragma)?;
-    conn.pragma_update(None, "synchronous", "NORMAL")
-        .map_err(StorageError::Pragma)?;
-    conn.pragma_update(None, "foreign_keys", true)
-        .map_err(StorageError::Pragma)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL; \
+         PRAGMA synchronous = NORMAL; \
+         PRAGMA foreign_keys = ON;",
+    )
+    .map_err(StorageError::Pragma)?;
     Ok(())
 }
 

@@ -33,6 +33,14 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             arch: aarch64
             cross: true
+    services:
+      greenmail:
+        image: greenmail/standalone:latest
+        env:
+          GREENMAIL_OPTS: "-Dgreenmail.smtp.hostname=0.0.0.0 -Dgreenmail.smtp.port=3025 -Dgreenmail.imap.hostname=0.0.0.0 -Dgreenmail.imap.port=3143 -Dgreenmail.users=test:test@localhost -Dgreenmail.auth.disabled"
+        ports:
+          - 3025:3025
+          - 3143:3143
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +83,18 @@ jobs:
       - name: install.sh smoke test
         if: matrix.cross == false
         run: bash tests/install_sh.sh
+        shell: bash
+
+      - name: e2e imap-to-search smoke
+        if: matrix.cross == false
+        run: |
+          # GreenMail is up via the services: block; the harness self-
+          # detects /.dockerenv-vs-not and falls through to running
+          # the inner test logic directly when host networking is
+          # already available (CI runners are linux/amd64 with the
+          # service container ports forwarded to the runner host).
+          export SCRYD_E2E_INNER=1
+          bash tests/e2e_imap_to_search.sh
         shell: bash
 
       - name: package tarball

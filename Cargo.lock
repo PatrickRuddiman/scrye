@@ -3461,6 +3461,8 @@ version = "0.2.0"
 dependencies = [
  "axum",
  "chrono",
+ "hyper",
+ "hyper-util",
  "mime",
  "nix",
  "scryd-config",
@@ -3475,6 +3477,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower",
+ "tower-service",
  "tracing",
  "tracing-subscriber",
 ]
