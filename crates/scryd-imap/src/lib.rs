@@ -54,7 +54,7 @@ pub use scheduler::{
 pub use supervisor::{
     log_auth_rejection, log_connect_failure, log_push_channel_drop, log_tls_failure,
 };
-pub use tombstone::{compute_tombstones, TOMBSTONE_SCAN_EVERY};
+pub use tombstone::{compute_tombstones, scan as tombstone_scan, TOMBSTONE_SCAN_EVERY};
 pub use sink::{FetchedMessage, MessageSink, SyncStateUpdate};
 pub use state::{ConnState, Connection, INCREMENTAL_FETCH_BATCH};
 pub use uidvalidity::handle_change as handle_uidvalidity_change;
