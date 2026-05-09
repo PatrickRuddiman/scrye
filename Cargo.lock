@@ -3369,7 +3369,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scryd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3392,7 +3392,7 @@ dependencies = [
 
 [[package]]
 name = "scryd-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "chrono",
@@ -3415,7 +3415,7 @@ dependencies = [
 
 [[package]]
 name = "scryd-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "regex",
  "secrecy",
@@ -3429,7 +3429,7 @@ dependencies = [
 
 [[package]]
 name = "scryd-fetch-weights"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3446,7 +3446,7 @@ dependencies = [
 
 [[package]]
 name = "scryd-imap"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-imap",
  "async-trait",
@@ -3468,7 +3468,7 @@ dependencies = [
 
 [[package]]
 name = "scryd-log"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3479,7 +3479,7 @@ dependencies = [
 
 [[package]]
 name = "scryd-mime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "htmd",
  "mail-parser",
@@ -3490,7 +3490,7 @@ dependencies = [
 
 [[package]]
 name = "scryd-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3512,7 +3512,7 @@ dependencies = [
 
 [[package]]
 name = "scryd-search"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "candle-core",
@@ -3532,7 +3532,7 @@ dependencies = [
 
 [[package]]
 name = "scryd-storage"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "hex",

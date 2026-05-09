@@ -17,7 +17,7 @@ members = [
 edition = "2021"
 rust-version = "1.78"
 license = "Apache-2.0"
-version = "0.1.0"
+version = "0.2.0"
 # scryd ships only via GitHub Releases; no crate is published to
 # crates.io. Marking the workspace `publish = false` matches that
 # distribution model and lets cargo-deny's `allow-wildcard-paths`
