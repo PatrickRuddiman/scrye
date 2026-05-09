@@ -49,7 +49,8 @@ pub use idle::{
 pub use poll::{effective_poll_interval, run_poll_loop, POLL_INTERVAL_FLOOR};
 pub use credential::{ConfigCredentialFetcher, CredentialFetcher};
 pub use scheduler::{
-    backoff_after, BACKOFF_CAP, INITIAL_BACKOFF, MAX_CONNECTIONS_PER_ACCOUNT,
+    backoff_after, Scheduler, SchedulerError, BACKOFF_CAP, INITIAL_BACKOFF,
+    MAX_CONNECTIONS_PER_ACCOUNT,
 };
 pub use supervisor::{
     log_auth_rejection, log_connect_failure, log_push_channel_drop, log_tls_failure,
