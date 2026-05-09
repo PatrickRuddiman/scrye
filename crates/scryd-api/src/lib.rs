@@ -25,13 +25,15 @@ pub enum ApiError {
     AlreadyRunning { path: std::path::PathBuf },
     #[error("connecting peer uid {peer_uid} is not the daemon's owning uid")]
     NonOwner { peer_uid: u32 },
+    #[error("SCRYD_ALLOWED_UID must be a non-negative integer; got `{raw}`")]
+    AllowedUidParse { raw: String },
     #[error("peer credentials unavailable: {0}")]
     PeerCred(#[source] std::io::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
 
-pub use peercred::{check_peer_uid, extract_peer_uid};
+pub use peercred::{check_peer_uid, expected_peer_uid, extract_peer_uid, init as init_peercred};
 pub use router::router;
 pub use serve::serve;
 pub use socket::bind;

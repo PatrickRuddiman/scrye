@@ -27,3 +27,7 @@ mime = "0.3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "io-util"] }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "json"] }
 tempfile = "3"
+# env-var manipulation is process-global, so the SCRYD_ALLOWED_UID
+# tests serialise via #[serial] to keep concurrent tests from racing
+# on the env var.
+serial_test = "3"

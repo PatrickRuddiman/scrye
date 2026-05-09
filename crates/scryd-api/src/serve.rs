@@ -7,7 +7,7 @@ use std::future::Future;
 use axum::Router;
 use tokio::net::UnixListener;
 
-use crate::peercred::check_stream_peer;
+use crate::peercred::{check_stream_peer, init as init_peercred};
 use crate::ApiError;
 
 /// Accept connections on `listener`, peercred-check each one, and serve
@@ -18,6 +18,8 @@ pub async fn serve(
     router: Router,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ApiError> {
+    init_peercred()?;
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
     let shutdown_signal = async move {

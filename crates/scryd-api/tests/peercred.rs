@@ -3,7 +3,8 @@
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use scryd_api::{bind, check_peer_uid, extract_peer_uid, ApiError};
+use scryd_api::{bind, check_peer_uid, expected_peer_uid, extract_peer_uid, ApiError};
+use serial_test::serial;
 use tempfile::TempDir;
 use tokio::net::UnixStream;
 use tracing_subscriber::fmt::MakeWriter;
@@ -64,8 +65,49 @@ fn check_peer_uid_rejects_mismatched_uid_with_log() {
     let line = captured.lines().last().expect("at least one log line");
     assert!(line.contains("\"category\":\"non-owner-user connection rejection\""));
     assert!(line.contains("\"peer_uid\":2000"));
+    assert!(line.contains("\"expected_uid\":1000"));
     assert!(line.contains("\"peer_pid\":4711"));
     assert!(line.contains("\"level\":\"ERROR\""));
+}
+
+const ENV_ALLOWED_UID: &str = "SCRYD_ALLOWED_UID";
+
+#[test]
+#[serial]
+fn env_unset_falls_back_to_getuid() {
+    std::env::remove_var(ENV_ALLOWED_UID);
+    let resolved = expected_peer_uid().unwrap();
+    assert_eq!(resolved, nix::unistd::getuid().as_raw());
+}
+
+#[test]
+#[serial]
+fn env_set_to_valid_uid_returns_parsed_value() {
+    std::env::set_var(ENV_ALLOWED_UID, "424242");
+    let resolved = expected_peer_uid().unwrap();
+    std::env::remove_var(ENV_ALLOWED_UID);
+    assert_eq!(resolved, 424242u32);
+}
+
+#[test]
+#[serial]
+fn env_set_to_empty_string_falls_back() {
+    std::env::set_var(ENV_ALLOWED_UID, "");
+    let resolved = expected_peer_uid().unwrap();
+    std::env::remove_var(ENV_ALLOWED_UID);
+    assert_eq!(resolved, nix::unistd::getuid().as_raw());
+}
+
+#[test]
+#[serial]
+fn env_set_to_garbage_returns_parse_error() {
+    std::env::set_var(ENV_ALLOWED_UID, "not-a-uid");
+    let result = expected_peer_uid();
+    std::env::remove_var(ENV_ALLOWED_UID);
+    match result {
+        Err(ApiError::AllowedUidParse { raw }) => assert_eq!(raw, "not-a-uid"),
+        other => panic!("expected AllowedUidParse, got {other:?}"),
+    }
 }
 
 #[tokio::test]
