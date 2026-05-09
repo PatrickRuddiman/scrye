@@ -1,0 +1,31 @@
+[Unit]
+Description=scryd — read-only IMAP indexer & search daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=scryd
+Group=scryd
+ExecStart=/usr/local/bin/scryd serve
+Restart=on-failure
+RestartSec=5
+
+Environment=SCRYD_ALLOWED_UID=__UID__
+Environment=XDG_CONFIG_HOME=/etc/scryd
+Environment=XDG_DATA_HOME=/var/lib/scryd
+Environment=XDG_RUNTIME_DIR=/run/scryd
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/scryd /var/lib/scryd /run/scryd
+PrivateTmp=yes
+PrivateDevices=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
