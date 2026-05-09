@@ -26,3 +26,8 @@ scryd-log = { path = "../scryd-log" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "json"] }
 tempfile = "3"
+# Async SMTP client used by tests/support/greenmail.rs to inject
+# fixture mail. tokio1 + builder are the only features the support
+# module needs; no TLS feature because GreenMail accepts plain SMTP
+# in test mode.
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1", "builder"] }
