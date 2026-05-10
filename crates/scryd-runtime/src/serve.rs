@@ -89,11 +89,12 @@ pub async fn serve_init() -> Result<ServeContext, RuntimeError> {
     })?;
 
     let require_peer_uid = api_config.server.require_peer_uid;
+    let socket_mode = api_config.server.socket_mode;
     let app_state = AppState::new(storage, indexer, api_config);
     let router = api_router(app_state);
 
     let runtime = runtime_dir()?;
-    let listener = bind(&runtime).await.map_err(|e| {
+    let listener = bind(&runtime, socket_mode).await.map_err(|e| {
         RuntimeError::PermissionInvariant {
             path: runtime,
             reason: e.to_string(),

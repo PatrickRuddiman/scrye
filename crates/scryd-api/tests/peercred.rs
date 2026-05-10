@@ -114,7 +114,7 @@ fn env_set_to_garbage_returns_parse_error() {
 async fn extract_peer_uid_returns_current_process_uid_for_self_connection() {
     let dir = TempDir::new().unwrap();
     let scryd_dir = dir.path().join("scryd");
-    let listener = bind(&scryd_dir).await.unwrap();
+    let listener = bind(&scryd_dir, 0o666).await.unwrap();
     let sock = scryd_dir.join("scryd.sock");
 
     let connect = tokio::spawn(async move { UnixStream::connect(&sock).await.unwrap() });

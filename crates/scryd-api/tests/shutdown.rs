@@ -13,7 +13,7 @@ use tokio::sync::oneshot;
 async fn serve_returns_when_shutdown_signal_resolves() {
     let dir = TempDir::new().unwrap();
     let scryd_dir = dir.path().join("scryd");
-    let listener = bind(&scryd_dir).await.unwrap();
+    let listener = bind(&scryd_dir, 0o666).await.unwrap();
 
     let storage_dir = dir.path().join("data");
     let storage = StorageHandle::open(&storage_dir, 1).unwrap();

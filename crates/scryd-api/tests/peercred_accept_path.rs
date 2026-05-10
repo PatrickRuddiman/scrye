@@ -63,7 +63,7 @@ async fn check_stream_peer_accepts_self_when_env_uid_matches_getuid() {
 
     let dir = TempDir::new().unwrap();
     let scryd_dir = dir.path().join("scryd");
-    let listener = bind(&scryd_dir).await.unwrap();
+    let listener = bind(&scryd_dir, 0o666).await.unwrap();
     let sock = scryd_dir.join("scryd.sock");
 
     let connect = tokio::spawn(async move { UnixStream::connect(&sock).await.unwrap() });
@@ -87,7 +87,7 @@ async fn check_stream_peer_returns_ok_when_disabled_even_for_mismatched_uid() {
 
     let dir = TempDir::new().unwrap();
     let scryd_dir = dir.path().join("scryd");
-    let listener = bind(&scryd_dir).await.unwrap();
+    let listener = bind(&scryd_dir, 0o666).await.unwrap();
     let sock = scryd_dir.join("scryd.sock");
 
     let connect = tokio::spawn(async move { UnixStream::connect(&sock).await.unwrap() });
