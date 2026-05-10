@@ -88,13 +88,17 @@ fn preflight_rejects_world_readable_config() {
 }
 
 #[test]
-fn preflight_rejects_loose_runtime_dir() {
+fn preflight_accepts_loose_runtime_dir_for_v02_layout() {
+    // v0.2.0's tmpfiles.d drop-in creates /run/scryd at 0750 (operator
+    // group access). v0.1.0 had it at 0700. Preflight asserts the
+    // runtime dir is a directory but no longer asserts an exact mode;
+    // the install-time tmpfiles drop-in is the source of truth.
     let _g = setup_layout(0o755, 0o600, None);
     match run_preflight() {
-        Err(RuntimeError::PermissionInvariant { reason, .. }) => {
-            assert!(reason.contains("runtime"));
-        }
-        other => panic!("expected PermissionInvariant for loose runtime dir, got {other:?}"),
+        Ok(_) => {}
+        other => panic!(
+            "expected preflight to accept loose runtime dir under v0.2.0, got {other:?}"
+        ),
     }
     cleanup_env();
 }
