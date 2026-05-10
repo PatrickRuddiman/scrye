@@ -11,6 +11,7 @@ use crate::client::Client;
 use crate::fetch::run_incremental;
 use crate::sink::MessageSink;
 use crate::state::{ConnState, Connection};
+use crate::tombstone::{scan as tombstone_scan, TOMBSTONE_SCAN_EVERY};
 use crate::ClientError;
 
 /// The minimum poll interval the scheduler honors. Operators can configure
@@ -48,6 +49,13 @@ where
 {
     let mut current_client = client;
     let mut last_seen_uid = initial_last_seen_uid;
+    let mut iteration: u32 = 0;
+    let mut tombstone_uidvalidity: u32 = sink
+        .stored_uidvalidity(&conn.account_id, &conn.folder)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0);
     conn.state = ConnState::Polling;
 
     loop {
@@ -59,9 +67,24 @@ where
             _ = tokio::time::sleep(poll_interval) => {}
         }
 
+        iteration = iteration.saturating_add(1);
+        if iteration > 1 && iteration % TOMBSTONE_SCAN_EVERY == 0 && tombstone_uidvalidity > 0 {
+            let local_uids = sink
+                .list_local_uids(&conn.account_id, &conn.folder, tombstone_uidvalidity)
+                .await
+                .unwrap_or_default();
+            let _ = tombstone_scan(conn, &mut current_client, sink, &local_uids).await;
+        }
+
         let new_uid = run_incremental(conn, &mut current_client, sink, last_seen_uid).await?;
         if new_uid > last_seen_uid {
             last_seen_uid = new_uid;
         }
+        tombstone_uidvalidity = sink
+            .stored_uidvalidity(&conn.account_id, &conn.folder)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(tombstone_uidvalidity);
     }
 }

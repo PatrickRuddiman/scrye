@@ -49,9 +49,17 @@ pub enum SchedulerError {
     NotStarted,
 }
 
-/// Per-account state held by the scheduler.
+/// Per-(account, folder) state held by the scheduler.
 struct SupervisorHandle {
     join: JoinHandle<()>,
+    /// Per-supervisor "fetch now" tick. Incremented by
+    /// `Scheduler::request_pass` so missed wakes don't merge.
+    pass_request: watch::Sender<u64>,
+    /// Per-supervisor exit signal. The scheduler flips this when
+    /// the (account, folder) pair disappears from config during
+    /// reconcile, so the supervisor can shut down without bringing
+    /// the whole daemon with it.
+    exit: watch::Sender<bool>,
 }
 
 pub struct Scheduler {
@@ -59,7 +67,7 @@ pub struct Scheduler {
     sink: Arc<dyn MessageSink>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
-    handles: Mutex<HashMap<String, SupervisorHandle>>,
+    handles: Mutex<HashMap<(String, String), SupervisorHandle>>,
     /// IDLE recycle cadence honored by the supervisor's idle loop.
     /// Tests override to a sub-second value; production uses
     /// [`crate::idle::IDLE_RECYCLE`].
@@ -87,30 +95,11 @@ impl Scheduler {
         self
     }
 
-    /// Spawn a supervisor task per configured account. Idempotent: if
-    /// a supervisor for an account id is already running, it is left
-    /// alone.
+    /// Spawn one supervisor task per (account, folder) pair, bounded
+    /// by `MAX_CONNECTIONS_PER_ACCOUNT` per account. Idempotent: a
+    /// supervisor key already present in the map is left alone.
     pub async fn start(&self) -> Result<(), SchedulerError> {
-        let mut handles = self.handles.lock().unwrap();
-        for account in &self.config.accounts {
-            if handles.contains_key(&account.id) {
-                continue;
-            }
-            let id = account.id.clone();
-            let config = self.config.clone();
-            let sink = self.sink.clone();
-            let shutdown_rx = self.shutdown_rx.clone();
-            let folder = account
-                .folders
-                .as_ref()
-                .and_then(|f| f.first().cloned())
-                .unwrap_or_else(|| "INBOX".to_string());
-            let idle_recycle = self.idle_recycle;
-            let join = tokio::spawn(async move {
-                run_account_supervisor(id, folder, config, sink, shutdown_rx, idle_recycle).await;
-            });
-            handles.insert(account.id.clone(), SupervisorHandle { join });
-        }
+        self.spawn_diff_against_config();
         Ok(())
     }
 
@@ -131,18 +120,118 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Reconcile placeholder. v0.3.0 ships the start/shutdown lifecycle;
-    /// dynamic add/remove of accounts via `reconcile` is left for a
-    /// follow-up that adds the diff-and-spawn machinery.
+    /// Reconcile the running supervisor set against the current
+    /// `Arc<Config>`. New accounts/folders get a fresh supervisor;
+    /// keys that disappeared from config get their `exit` signal
+    /// flipped and are joined.
     pub async fn reconcile(&self) -> Result<(), SchedulerError> {
+        let desired_keys = self.desired_keys();
+        let to_remove: Vec<(String, String)> = {
+            let handles = self.handles.lock().unwrap();
+            handles
+                .keys()
+                .filter(|k| !desired_keys.contains(k))
+                .cloned()
+                .collect()
+        };
+        for key in to_remove {
+            let removed = self.handles.lock().unwrap().remove(&key);
+            if let Some(h) = removed {
+                let _ = h.exit.send(true);
+                let _ = h.join.await;
+            }
+        }
+        self.spawn_diff_against_config();
         Ok(())
     }
 
-    /// request_pass placeholder. v0.3.0 ships the IDLE-driven
-    /// freshness path; on-demand "fetch now" signaling is left for
-    /// the api slice's POST /sync.
+    /// Signal every running supervisor to "fetch now if you can".
+    /// Returns the list of (account_id, folder) pairs that received
+    /// the signal. The supervisor decides whether to honour it
+    /// (skips when in backoff or mid-fetch).
     pub async fn request_pass(&self) -> Vec<String> {
-        Vec::new()
+        let mut signaled = Vec::new();
+        let handles = self.handles.lock().unwrap();
+        for ((account_id, folder), h) in handles.iter() {
+            let next = h.pass_request.borrow().wrapping_add(1);
+            if h.pass_request.send(next).is_ok() {
+                signaled.push(format!("{account_id}/{folder}"));
+            }
+        }
+        signaled
+    }
+
+    /// Tests-only: snapshot of currently-running (account, folder)
+    /// supervisor keys.
+    pub fn supervisor_keys(&self) -> Vec<(String, String)> {
+        self.handles.lock().unwrap().keys().cloned().collect()
+    }
+
+    fn desired_keys(&self) -> std::collections::HashSet<(String, String)> {
+        let mut out = std::collections::HashSet::new();
+        for account in &self.config.accounts {
+            let folders: Vec<String> = account
+                .folders
+                .clone()
+                .unwrap_or_else(|| vec!["INBOX".to_string()]);
+            for folder in folders.into_iter().take(MAX_CONNECTIONS_PER_ACCOUNT) {
+                out.insert((account.id.clone(), folder));
+            }
+        }
+        out
+    }
+
+    fn spawn_diff_against_config(&self) {
+        let mut handles = self.handles.lock().unwrap();
+        for account in &self.config.accounts {
+            let folders: Vec<String> = account
+                .folders
+                .clone()
+                .unwrap_or_else(|| vec!["INBOX".to_string()]);
+            if folders.len() > MAX_CONNECTIONS_PER_ACCOUNT {
+                tracing::warn!(
+                    account_id = %account.id,
+                    requested = folders.len(),
+                    cap = MAX_CONNECTIONS_PER_ACCOUNT,
+                    "account configured with more folders than MAX_CONNECTIONS_PER_ACCOUNT; tail dropped"
+                );
+            }
+            for folder in folders.into_iter().take(MAX_CONNECTIONS_PER_ACCOUNT) {
+                let key = (account.id.clone(), folder.clone());
+                if handles.contains_key(&key) {
+                    continue;
+                }
+                let (pass_tx, pass_rx) = watch::channel(0u64);
+                let (exit_tx, exit_rx) = watch::channel(false);
+                let id = account.id.clone();
+                let folder_owned = folder.clone();
+                let config = self.config.clone();
+                let sink = self.sink.clone();
+                let shutdown_rx = self.shutdown_rx.clone();
+                let idle_recycle = self.idle_recycle;
+                let join = tokio::spawn(async move {
+                    run_account_supervisor(
+                        id,
+                        folder_owned,
+                        config,
+                        sink,
+                        shutdown_rx,
+                        exit_rx,
+                        pass_rx,
+                        idle_recycle,
+                    )
+                    .await;
+                });
+                handles.insert(
+                    key,
+                    SupervisorHandle {
+                        join,
+                        pass_request: pass_tx,
+                        exit: exit_tx,
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -151,19 +240,22 @@ impl Scheduler {
 ///   2. login → examine → run_initial_backfill → run_idle_loop.
 ///   3. On any error, emit the matching failure log, update
 ///      account_health via the sink, sleep backoff, retry.
+#[allow(clippy::too_many_arguments)]
 async fn run_account_supervisor(
     account_id: String,
     folder: String,
     config: Arc<Config>,
     sink: Arc<dyn MessageSink>,
     mut shutdown: watch::Receiver<bool>,
+    mut exit: watch::Receiver<bool>,
+    _pass_request: watch::Receiver<u64>,
     idle_recycle: Duration,
 ) {
     let mut consecutive_failures: u32 = 0;
     let mut last_seen_uid: u32 = 0;
 
     loop {
-        if *shutdown.borrow() {
+        if *shutdown.borrow() || *exit.borrow() {
             return;
         }
 
@@ -212,8 +304,8 @@ async fn run_account_supervisor(
             }
         }
 
-        // Bail if shutdown got set during the cycle.
-        if *shutdown.borrow() {
+        // Bail if shutdown / exit got set during the cycle.
+        if *shutdown.borrow() || *exit.borrow() {
             return;
         }
 
@@ -226,6 +318,7 @@ async fn run_account_supervisor(
         };
         tokio::select! {
             _ = shutdown.changed() => return,
+            _ = exit.changed() => return,
             _ = tokio::time::sleep(delay) => {}
         }
     }

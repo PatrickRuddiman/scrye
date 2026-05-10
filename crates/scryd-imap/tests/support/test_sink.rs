@@ -53,4 +53,18 @@ impl MessageSink for CollectingSink {
             .push((account_id.to_string(), folder.to_string(), update));
         Ok(())
     }
+
+    async fn list_local_uids(
+        &self,
+        account_id: &str,
+        folder: &str,
+        _uidvalidity: u32,
+    ) -> Result<Vec<u32>, ClientError> {
+        let submitted = self.submitted.lock().unwrap();
+        Ok(submitted
+            .iter()
+            .filter(|m| m.account_id == account_id && m.folder == folder)
+            .map(|m| m.server_uid)
+            .collect())
+    }
 }

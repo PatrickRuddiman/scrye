@@ -167,6 +167,35 @@ impl StorageHandle {
         })
         .await
     }
+
+    /// Return the server-side UID set scryd has indexed under
+    /// `(account_id, folder, uidvalidity)`. The supervisor's
+    /// tombstone scan diffs this against `UID SEARCH ALL` to
+    /// identify locally-present-but-server-absent rows.
+    pub async fn list_uids_for(
+        &self,
+        account_id: &str,
+        folder: &str,
+        uidvalidity: u32,
+    ) -> Result<Vec<u32>, StorageError> {
+        let account_id = account_id.to_string();
+        let folder = folder.to_string();
+        self.with_reader(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT server_uid FROM messages \
+                 WHERE account_id = ?1 AND folder = ?2 AND uidvalidity = ?3 \
+                   AND tombstoned_at IS NULL",
+            )?;
+            let rows = stmt
+                .query_map(
+                    params![account_id, folder, uidvalidity as i64],
+                    |row| row.get::<_, i64>(0).map(|v| v as u32),
+                )?
+                .collect::<rusqlite::Result<Vec<u32>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
 }
 
 fn row_to_message_row(row: &Row<'_>) -> rusqlite::Result<MessageRow> {

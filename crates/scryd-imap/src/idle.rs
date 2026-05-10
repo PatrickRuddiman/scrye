@@ -13,6 +13,7 @@ use crate::client::Client;
 use crate::fetch::run_incremental;
 use crate::sink::MessageSink;
 use crate::state::{ConnState, Connection};
+use crate::tombstone::{scan as tombstone_scan, TOMBSTONE_SCAN_EVERY};
 use crate::ClientError;
 
 /// Cadence at which the IDLE channel is recycled. RFC 2177 recommends
@@ -80,10 +81,32 @@ where
 {
     let mut current_client = client;
     let mut last_seen_uid = initial_last_seen_uid;
+    let mut iteration: u32 = 0;
+    // The uidvalidity context for tombstone scans is read from the
+    // sink's stored value — populated during the most recent
+    // run_initial_backfill / run_incremental update_sync_state call.
+    let mut tombstone_uidvalidity: u32 = sink
+        .stored_uidvalidity(&conn.account_id, &conn.folder)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0);
 
     loop {
         if *shutdown.borrow() {
             return Ok((current_client, last_seen_uid));
+        }
+
+        // Every TOMBSTONE_SCAN_EVERY iterations, run the scan before
+        // re-entering IDLE. iteration=0 skips the first scan (nothing
+        // useful to compare yet).
+        iteration = iteration.saturating_add(1);
+        if iteration > 1 && iteration % TOMBSTONE_SCAN_EVERY == 0 && tombstone_uidvalidity > 0 {
+            let local_uids = sink
+                .list_local_uids(&conn.account_id, &conn.folder, tombstone_uidvalidity)
+                .await
+                .unwrap_or_default();
+            let _ = tombstone_scan(conn, &mut current_client, sink, &local_uids).await;
         }
 
         conn.state = ConnState::Idling;
@@ -115,6 +138,15 @@ where
                 if new_uid > last_seen_uid {
                     last_seen_uid = new_uid;
                 }
+                // Refresh the uidvalidity used by future tombstone
+                // scans — run_incremental's update_sync_state may
+                // have advanced it.
+                tombstone_uidvalidity = sink
+                    .stored_uidvalidity(&conn.account_id, &conn.folder)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(tombstone_uidvalidity);
             }
         }
     }

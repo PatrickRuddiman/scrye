@@ -65,6 +65,20 @@ where
             conn.folder
         ))
     })?;
+
+    // UIDVALIDITY change handling: the sink's stored value (from a
+    // previous session) may differ from what the server reports
+    // now. Route through the lifecycle-log helper before starting
+    // the new backfill so the audit trail names the reset.
+    if let Ok(Some(stored)) = sink
+        .stored_uidvalidity(&conn.account_id, &conn.folder)
+        .await
+    {
+        if stored != server_uidvalidity {
+            crate::uidvalidity::handle_change(conn, sink, server_uidvalidity).await?;
+        }
+    }
+
     let target = meta.uid_next.map(|n| n.saturating_sub(1));
 
     conn.enter_backfill(target);

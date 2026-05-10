@@ -177,6 +177,31 @@ impl MessageSink for StorageMessageSink {
             .await
             .map_err(map_storage_err)
     }
+
+    async fn list_local_uids(
+        &self,
+        account_id: &str,
+        folder: &str,
+        uidvalidity: u32,
+    ) -> Result<Vec<u32>, ClientError> {
+        self.storage
+            .list_uids_for(account_id, folder, uidvalidity)
+            .await
+            .map_err(map_storage_err)
+    }
+
+    async fn stored_uidvalidity(
+        &self,
+        account_id: &str,
+        folder: &str,
+    ) -> Result<Option<u32>, ClientError> {
+        let row = self
+            .storage
+            .get_sync_state(account_id, folder)
+            .await
+            .map_err(map_storage_err)?;
+        Ok(row.and_then(|r| r.uidvalidity))
+    }
 }
 
 fn map_storage_err(err: scryd_storage::StorageError) -> ClientError {
