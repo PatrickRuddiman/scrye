@@ -12,15 +12,26 @@ use tokio::net::UnixListener;
 use crate::peercred::{check_stream_peer, init as init_peercred};
 use crate::ApiError;
 
-/// Accept connections on `listener`, peercred-check each one, and serve
-/// them through `router`. `shutdown` is awaited; once it resolves, the
-/// loop stops accepting and existing connections drain.
+/// Accept connections on `listener`, optionally peercred-check each
+/// one, and serve them through `router`. `shutdown` is awaited; once
+/// it resolves, the loop stops accepting and existing connections
+/// drain.
+///
+/// `require_peer_uid` controls the kernel-level access gate. The
+/// v0.3.1 default is `false` (open service shape — anyone who can
+/// reach the socket can call the api; the consumer's higher-layer
+/// api is the auth boundary). Set `true` (via `[server]
+/// require_peer_uid = true` in config) to recover the v0.2.0
+/// single-operator-host posture.
 pub async fn serve(
     listener: UnixListener,
     router: Router,
+    require_peer_uid: bool,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ApiError> {
-    init_peercred()?;
+    if require_peer_uid {
+        init_peercred()?;
+    }
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
@@ -43,8 +54,9 @@ pub async fn serve(
                         return Err(ApiError::Bind(e));
                     }
                 };
-                if check_stream_peer(&stream).is_err() {
-                    // Rejection log was already emitted.
+                if check_stream_peer(&stream, require_peer_uid).is_err() {
+                    // Rejection log was already emitted (only when
+                    // require_peer_uid was on; off path returns Ok).
                     continue;
                 }
                 let mut svc = svc.clone();

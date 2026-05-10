@@ -23,7 +23,7 @@ async fn serve_returns_when_shutdown_signal_resolves() {
 
     let (tx, rx) = oneshot::channel::<()>();
     let serve_task = tokio::spawn(async move {
-        serve(listener, r, async {
+        serve(listener, r, false, async {
             let _ = rx.await;
         })
         .await

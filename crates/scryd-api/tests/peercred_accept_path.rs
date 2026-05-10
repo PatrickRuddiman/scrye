@@ -70,8 +70,38 @@ async fn check_stream_peer_accepts_self_when_env_uid_matches_getuid() {
     let (server_side, _addr) = listener.accept().await.unwrap();
     let _client_side = connect.await.unwrap();
 
-    let peer_uid = check_stream_peer(&server_side).expect("self-connection must pass peercred");
+    let peer_uid =
+        check_stream_peer(&server_side, true).expect("self-connection must pass peercred");
     assert_eq!(peer_uid, my_uid);
+
+    std::env::remove_var(ENV_ALLOWED_UID);
+}
+
+#[tokio::test]
+#[serial]
+async fn check_stream_peer_returns_ok_when_disabled_even_for_mismatched_uid() {
+    // v0.3.1 default: require_peer_uid = false. The disabled path must
+    // return the peer uid without comparison or log-line emission.
+    let mismatch_uid = nix::unistd::getuid().as_raw().wrapping_add(1);
+    std::env::set_var(ENV_ALLOWED_UID, mismatch_uid.to_string());
+
+    let dir = TempDir::new().unwrap();
+    let scryd_dir = dir.path().join("scryd");
+    let listener = bind(&scryd_dir).await.unwrap();
+    let sock = scryd_dir.join("scryd.sock");
+
+    let connect = tokio::spawn(async move { UnixStream::connect(&sock).await.unwrap() });
+    let (server_side, _addr) = listener.accept().await.unwrap();
+    let _client_side = connect.await.unwrap();
+
+    let captured = capture(|| {
+        let res = check_stream_peer(&server_side, false);
+        assert!(res.is_ok(), "disabled peercred must accept any peer");
+    });
+    assert!(
+        !captured.contains("non-owner-user connection rejection"),
+        "no rejection log expected when disabled, got: {captured}"
+    );
 
     std::env::remove_var(ENV_ALLOWED_UID);
 }

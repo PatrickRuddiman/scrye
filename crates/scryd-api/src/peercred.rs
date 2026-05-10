@@ -66,11 +66,16 @@ pub fn check_peer_uid(peer_uid: u32, expected_uid: u32, peer_pid: i32) -> Result
     Err(ApiError::NonOwner { peer_uid })
 }
 
-/// Convenience: read peer uid + check in one call against the daemon's
-/// cached expected uid (resolved from `SCRYD_ALLOWED_UID` or the
-/// process uid).
-pub fn check_stream_peer(stream: &UnixStream) -> Result<u32, ApiError> {
+/// Convenience: read peer uid + (optionally) check in one call. When
+/// `enabled` is `false`, the peer uid is returned without comparison
+/// or rejection — the v0.3.1 default service shape, where access
+/// control lives in the consumer's higher-layer API. When `enabled`
+/// is `true`, falls back to the v0.2.0 single-operator-host model.
+pub fn check_stream_peer(stream: &UnixStream, enabled: bool) -> Result<u32, ApiError> {
     let peer_uid = extract_peer_uid(stream)?;
+    if !enabled {
+        return Ok(peer_uid);
+    }
     let peer_pid = stream
         .peer_cred()
         .ok()

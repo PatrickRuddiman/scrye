@@ -88,6 +88,7 @@ pub async fn serve_init() -> Result<ServeContext, RuntimeError> {
         }
     })?;
 
+    let require_peer_uid = api_config.server.require_peer_uid;
     let app_state = AppState::new(storage, indexer, api_config);
     let router = api_router(app_state);
 
@@ -100,10 +101,15 @@ pub async fn serve_init() -> Result<ServeContext, RuntimeError> {
     })?;
 
     let (api_tx, api_rx) = tokio::sync::watch::channel(false);
-    let api_handle = tokio::spawn(scryd_api::serve(listener, router, async move {
-        let mut rx = api_rx;
-        let _ = rx.changed().await;
-    }));
+    let api_handle = tokio::spawn(scryd_api::serve(
+        listener,
+        router,
+        require_peer_uid,
+        async move {
+            let mut rx = api_rx;
+            let _ = rx.changed().await;
+        },
+    ));
 
     log_lifecycle!(kind = kind::STARTUP);
 
