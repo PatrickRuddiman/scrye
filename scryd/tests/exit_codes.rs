@@ -5,17 +5,21 @@ fn scryd() -> Command {
 }
 
 #[test]
-fn reindex_without_xdg_runtime_dir_exits_with_general_error_code() {
+fn reindex_without_xdg_runtime_dir_falls_through_to_system_socket_path() {
+    // v0.2.0: when XDG_RUNTIME_DIR is unset, UdsClient::from_env falls
+    // back to /run/scryd/scryd.sock. On a host with no daemon (CI
+    // runners, dev boxes) that path doesn't exist, so the call surfaces
+    // ExitCode::DaemonNotRunning (2) rather than a generic env-var error.
     let output = scryd()
         .env_remove("XDG_RUNTIME_DIR")
         .arg("reindex")
         .output()
         .expect("run");
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
-        stderr.contains("XDG_RUNTIME_DIR"),
-        "expected XDG_RUNTIME_DIR mention in stderr: {stderr}"
+        stderr.contains("daemon-not-running"),
+        "expected daemon-not-running category: {stderr}"
     );
 }
 
