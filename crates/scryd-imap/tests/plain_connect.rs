@@ -21,6 +21,7 @@ async fn plain_login_to_greenmail_returns_loggedin_plain() {
         "test",
         "test",
         "test-account",
+        None,
     )
     .await;
 

@@ -40,6 +40,7 @@ async fn run_idle_loop_picks_up_new_inject_within_budget() {
         "test",
         "test",
         "idle-test",
+        None,
     )
     .await
     .expect("login");

@@ -37,6 +37,7 @@ async fn run_initial_backfill_submits_each_message_and_updates_state() {
         "test",
         "test",
         "backfill-test",
+        None,
     )
     .await
     .expect("login");

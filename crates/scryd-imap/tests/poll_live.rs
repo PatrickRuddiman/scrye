@@ -39,6 +39,7 @@ async fn run_poll_loop_picks_up_inject_within_budget() {
         "test",
         "test",
         "poll-test",
+        None,
     )
     .await
     .expect("login");

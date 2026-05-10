@@ -274,9 +274,23 @@ async fn run_account_supervisor(
         let tls = account.tls;
         let user = account.user.clone();
         let password = account.password.expose().to_string();
+        let ca_path = account.tls_ca_path.clone();
 
-        let cycle_result =
-            run_one_cycle(&account_id, &folder, &host, port, tls, &user, &password, sink.as_ref(), &mut last_seen_uid, idle_recycle, shutdown.clone()).await;
+        let cycle_result = run_one_cycle(
+            &account_id,
+            &folder,
+            &host,
+            port,
+            tls,
+            &user,
+            &password,
+            ca_path.as_deref(),
+            sink.as_ref(),
+            &mut last_seen_uid,
+            idle_recycle,
+            shutdown.clone(),
+        )
+        .await;
 
         match cycle_result {
             Ok(()) => {
@@ -333,12 +347,13 @@ async fn run_one_cycle(
     tls: bool,
     user: &str,
     password: &str,
+    ca_path: Option<&std::path::Path>,
     sink: &dyn MessageSink,
     last_seen_uid: &mut u32,
     idle_recycle: Duration,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ClientError> {
-    let logged_in = login(host, port, tls, user, password, account_id).await?;
+    let logged_in = login(host, port, tls, user, password, account_id, ca_path).await?;
 
     let mut conn = Connection::new(account_id, folder);
 

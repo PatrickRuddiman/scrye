@@ -38,6 +38,7 @@ async fn fetch_batch_returns_injected_messages() {
         "test",
         "test",
         "fetch-test",
+        None,
     )
     .await
     .expect("login");

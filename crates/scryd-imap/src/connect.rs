@@ -2,11 +2,13 @@
 //! corresponding spec failure-category log line so the operator can
 //! triage with `journalctl --user -u scryd | jq`.
 
+use std::path::Path;
+
 use scryd_log::{category, log_failure};
 
 use crate::client::Client;
 use crate::plain::{connect_plain, PlainStream};
-use crate::tls::{connect_tls, TlsStream};
+use crate::tls::{connect_tls, connect_tls_with_ca, TlsStream};
 use crate::ClientError;
 
 /// Either a TLS-wrapped (production) or plain-TCP (test fixture) IMAP
@@ -18,16 +20,24 @@ pub enum LoggedIn {
 }
 
 /// Connect over TLS, complete the IMAP greeting, and LOGIN. Production
-/// path. On any failure path, emits the matching `connect failure` /
-/// `tls failure` / `auth rejection` log line tagged with the account id.
+/// path. `ca_path` selects the trust anchor: `None` uses the baked-in
+/// `webpki-roots`; `Some(p)` uses the PEM bundle at `p` as the sole
+/// trust anchor (corporate/self-signed CA support). On any failure
+/// path, emits the matching `connect failure` / `tls failure` / `auth
+/// rejection` log line tagged with the account id.
 pub async fn login_tls(
     host: &str,
     port: u16,
     user: &str,
     password: &str,
     account_id: &str,
+    ca_path: Option<&Path>,
 ) -> Result<Client<TlsStream>, ClientError> {
-    let tls = match connect_tls(host, port).await {
+    let tls_result = match ca_path {
+        Some(p) => connect_tls_with_ca(host, port, p).await,
+        None => connect_tls(host, port).await,
+    };
+    let tls = match tls_result {
         Ok(s) => s,
         Err(ClientError::Connect(msg)) => {
             log_failure!(
@@ -105,7 +115,8 @@ pub async fn login_plain(
     Ok(Client::from_session(session))
 }
 
-/// Dispatch to TLS or plain login based on `tls`.
+/// Dispatch to TLS or plain login based on `tls`. `ca_path` is
+/// honoured only on the TLS path (plain has no trust anchor).
 pub async fn login(
     host: &str,
     port: u16,
@@ -113,9 +124,10 @@ pub async fn login(
     user: &str,
     password: &str,
     account_id: &str,
+    ca_path: Option<&Path>,
 ) -> Result<LoggedIn, ClientError> {
     if tls {
-        login_tls(host, port, user, password, account_id)
+        login_tls(host, port, user, password, account_id, ca_path)
             .await
             .map(LoggedIn::Tls)
     } else {

@@ -38,6 +38,7 @@ async fn tombstone_scan_emits_tombstones_for_locally_present_server_absent_uids(
         "test",
         "test",
         "tombstone-test",
+        None,
     )
     .await
     .expect("login");

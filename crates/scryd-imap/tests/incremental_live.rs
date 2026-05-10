@@ -38,6 +38,7 @@ async fn run_incremental_fetches_only_new_uids_and_updates_watermark() {
         "test",
         "test",
         "incremental-test",
+        None,
     )
     .await
     .expect("login");
