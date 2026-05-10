@@ -226,3 +226,53 @@ fn load_refuses_world_readable_config() {
         other => panic!("expected PermissionInvariant, got {other:?}"),
     }
 }
+
+#[test]
+fn server_table_defaults_when_absent() {
+    let f = write_config(MIN_VALID);
+    let cfg = Config::load(f.path()).expect("loads");
+    assert!(!cfg.server.require_peer_uid);
+    assert_eq!(cfg.server.socket_mode, 0o666);
+}
+
+#[test]
+fn server_table_explicit_values_round_trip() {
+    let f = write_config(
+        r#"
+[server]
+require_peer_uid = true
+socket_mode = 0o660
+
+[[accounts]]
+id = "primary"
+host = "imap.example.com"
+port = 993
+user = "alice@example.com"
+password = "hunter2"
+"#,
+    );
+    let cfg = Config::load(f.path()).expect("loads");
+    assert!(cfg.server.require_peer_uid);
+    assert_eq!(cfg.server.socket_mode, 0o660);
+}
+
+#[test]
+fn account_tls_ca_path_round_trips() {
+    let f = write_config(
+        r#"
+[[accounts]]
+id = "primary"
+host = "imap.example.com"
+port = 993
+user = "alice@example.com"
+password = "hunter2"
+tls_ca_path = "/etc/scryd/ca/example.pem"
+"#,
+    );
+    let cfg = Config::load(f.path()).expect("loads");
+    assert_eq!(
+        cfg.accounts[0].tls_ca_path.as_deref(),
+        Some(std::path::Path::new("/etc/scryd/ca/example.pem"))
+    );
+}
+

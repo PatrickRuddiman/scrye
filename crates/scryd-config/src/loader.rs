@@ -8,9 +8,8 @@ use crate::secret::AccountPassword;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Config {
-    /// Reserved. The `[server]` section is empty in v1; XDG-derived paths and
-    /// the kernel-enforced socket location replace what would have been bind
-    /// options. Future versions may introduce knobs here.
+    /// Server-side knobs. Defaults to "open API, peercred check off"
+    /// — the v0.3.1 service shape. See [`ServerCfg`].
     #[serde(default)]
     pub server: ServerCfg,
     #[serde(default)]
@@ -21,8 +20,41 @@ pub struct Config {
     pub accounts: Vec<AccountCfg>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-pub struct ServerCfg {}
+#[derive(Debug, Deserialize)]
+pub struct ServerCfg {
+    /// Whether to enforce the SO_PEERCRED uid match at accept time.
+    /// Defaults to `false` (open) — the consumer's higher-layer API
+    /// is the auth boundary. Set to `true` to fall back to the
+    /// v0.2.0 single-operator-host model that rejects any peer uid
+    /// other than the daemon's expected one.
+    #[serde(default = "default_require_peer_uid")]
+    pub require_peer_uid: bool,
+    /// File mode applied to `/run/scryd/scryd.sock` after bind. The
+    /// kernel rejects connections whose euid + group don't satisfy
+    /// the mode bits, so this is the coarse network-access gate.
+    /// Defaults to `0o666` (anyone on the host) — the v0.3.1 service
+    /// model. Override to `0o660` + manage the directory's group to
+    /// recover a v0.2.0-style "operator-only" bind.
+    #[serde(default = "default_socket_mode")]
+    pub socket_mode: u32,
+}
+
+fn default_require_peer_uid() -> bool {
+    false
+}
+
+fn default_socket_mode() -> u32 {
+    0o666
+}
+
+impl Default for ServerCfg {
+    fn default() -> Self {
+        Self {
+            require_peer_uid: default_require_peer_uid(),
+            socket_mode: default_socket_mode(),
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct SyncCfg {
@@ -91,6 +123,14 @@ pub struct AccountCfg {
     /// toggle, not a cert-skip-verify option.
     #[serde(default = "default_tls")]
     pub tls: bool,
+    /// Optional PEM file path with one or more X.509 root certificates
+    /// scryd should use as trust anchors for THIS account's TLS
+    /// handshake instead of the baked-in `webpki-roots` bundle.
+    /// Defaults to `None` (use system / baked-in roots). Useful for
+    /// corporate IMAP servers behind a private CA without rebuilding
+    /// scryd against a custom rustls trust store.
+    #[serde(default)]
+    pub tls_ca_path: Option<PathBuf>,
 }
 
 fn default_tls() -> bool {
