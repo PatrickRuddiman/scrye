@@ -1,1 +1,1 @@
-d /run/scryd 0750 scryd __USER__ -
+d /run/scryd 0755 scryd scryd -
