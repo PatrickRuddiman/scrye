@@ -15,13 +15,24 @@ use tokio::io::AsyncWriteExt;
 const DEFAULT_WEIGHTS_URL: &str =
     "https://huggingface.co/dropbox/witchcraft-weights/resolve/main/xtr-weights.gguf";
 
-/// Pinned SHA-256 of the expected weights bundle. Set to a placeholder
-/// — the build-and-packaging slice's first concrete release picks the
-/// canonical hash from the Hugging Face revision and bakes it in. v1
-/// allows callers to override via `--sha256` so the test harness and
-/// air-gapped installers don't need a network round-trip.
-const DEFAULT_WEIGHTS_SHA256: &str =
-    "0000000000000000000000000000000000000000000000000000000000000000";
+/// Pinned SHA-256 of the expected weights bundle. Three resolution
+/// orders, in priority:
+///   1. `--sha256 <hex>` flag on the CLI.
+///   2. `SCRYD_PINNED_WEIGHTS_SHA256` env var.
+///   3. The build-time `WEIGHTS_SHA256` env var (set by the release
+///      pipeline once the canonical Hugging Face revision is pinned).
+///   4. Fall back to the placeholder + emit a one-line stderr warning
+///      that integrity checking is effectively disabled.
+///
+/// The release pipeline computes the upstream file's SHA-256 once and
+/// re-runs `cargo build` with `WEIGHTS_SHA256=<hex>`; that hash is
+/// baked into the shipped binary. Until that happens, operators using
+/// `scryd-fetch-weights` interactively pass `--sha256` to opt into
+/// the integrity check.
+const DEFAULT_WEIGHTS_SHA256: &str = match option_env!("WEIGHTS_SHA256") {
+    Some(s) => s,
+    None => "0000000000000000000000000000000000000000000000000000000000000000",
+};
 
 const FILENAME: &str = "xtr-weights.gguf";
 
@@ -55,9 +66,25 @@ async fn main() -> anyhow::Result<()> {
     };
     let target = target_dir.join(FILENAME);
     let url = args.url.unwrap_or_else(|| DEFAULT_WEIGHTS_URL.to_string());
-    let expected_sha = args.sha256.unwrap_or_else(|| DEFAULT_WEIGHTS_SHA256.to_string());
+    let expected_sha = args
+        .sha256
+        .or_else(|| std::env::var("SCRYD_PINNED_WEIGHTS_SHA256").ok())
+        .unwrap_or_else(|| DEFAULT_WEIGHTS_SHA256.to_string());
+    if expected_sha.chars().all(|c| c == '0') {
+        eprintln!(
+            "scryd-fetch-weights: warning: SHA-256 not pinned at build time; integrity check is a no-op. \
+             Pass --sha256 <hex> or set SCRYD_PINNED_WEIGHTS_SHA256 to enforce."
+        );
+    }
 
+    let placeholder_sha = expected_sha.chars().all(|c| c == '0');
     if target.exists() {
+        if placeholder_sha {
+            // Without a pinned SHA, presence is sufficient — the
+            // build-time WEIGHTS_SHA256 isn't set on this binary.
+            println!("weights present (sha unverified — see warning above)");
+            return Ok(());
+        }
         match sha256_hex(&target).await {
             Ok(actual) if actual == expected_sha => {
                 println!("weights ok");
@@ -83,7 +110,8 @@ async fn main() -> anyhow::Result<()> {
     download_to(&url, &tmp).await?;
 
     let actual = sha256_hex(&tmp).await?;
-    if actual != expected_sha {
+    let placeholder = expected_sha.chars().all(|c| c == '0');
+    if !placeholder && actual != expected_sha {
         let _ = tokio::fs::remove_file(&tmp).await;
         anyhow::bail!(
             "downloaded weights hash {actual} != expected {expected_sha}; aborting"

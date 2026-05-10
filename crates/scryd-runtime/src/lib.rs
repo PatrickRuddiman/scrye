@@ -1,12 +1,12 @@
 //! Daemon runtime: XDG resolution, preflight self-checks, the
-//! `StorageMessageSink` that adapts scryd-imap → scryd-mime → scryd-storage,
-//! and the `serve()` orchestration entry that the `scryd serve` CLI verb
-//! invokes.
+//! `StorageMessageSink` that adapts scryd-imap → scryd-mime →
+//! scryd-storage, and the `serve()` orchestration entry that the
+//! `scryd serve` CLI verb invokes.
 //!
-//! The full live orchestration (binding the imap-sync scheduler + indexer
-//! drainer + api router into a tokio runtime) is partially deferred along
-//! with the IMAP and witchcraft live integrations; this crate ships every
-//! testable seam (XDG paths, preflight invariants, sink wiring).
+//! `serve()` wires logging + preflight + storage + WitchcraftIndexer
+//! + drainer + scheduler + axum router over UDS into a single async
+//! entry point. Each component shuts down cooperatively on
+//! SIGTERM/SIGINT.
 
 pub mod preflight;
 pub mod serve;

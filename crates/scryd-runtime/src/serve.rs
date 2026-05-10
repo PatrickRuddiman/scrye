@@ -10,13 +10,13 @@ use scryd_api::{bind, router as api_router, AppState};
 use scryd_config::Config;
 use scryd_imap::{MessageSink, Scheduler};
 use scryd_log::{kind, log_lifecycle};
-use scryd_search::{Drainer, InMemoryIndexer};
+use scryd_search::{Drainer, WitchcraftIndexer};
 use scryd_storage::StorageHandle;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::sink::StorageMessageSink;
-use crate::xdg::{config_path, data_dir, runtime_dir};
+use crate::xdg::{assets_dir, config_path, data_dir, runtime_dir};
 use crate::RuntimeError;
 
 /// Components started by [`serve_init`]. The api router has already
@@ -66,7 +66,24 @@ pub async fn serve_init() -> Result<ServeContext, RuntimeError> {
     // `messages.account_id` doesn't reject the first batch of fetches.
     let _ = storage.reconcile_from_config(&api_config).await?;
 
-    let indexer: Arc<dyn scryd_search::Indexer> = Arc::new(InMemoryIndexer::new());
+    // Witchcraft is the production indexer. The sqlite file at
+    // <data_dir>/witchcraft.sqlite is the persistence boundary —
+    // deleting it resets the index. Weights live at
+    // <assets_dir>/xtr-weights.gguf and are loaded lazily on the
+    // first search; task 08 auto-fetches them on first start when
+    // missing.
+    let assets = assets_dir()?;
+    std::fs::create_dir_all(&assets).ok();
+    let witchcraft_db = scryd_data.join("witchcraft.sqlite");
+    ensure_weights_present(&assets).await?;
+    let indexer: Arc<dyn scryd_search::Indexer> = Arc::new(
+        WitchcraftIndexer::open(&witchcraft_db, &assets)
+            .await
+            .map_err(|e| RuntimeError::PermissionInvariant {
+                path: witchcraft_db.clone(),
+                reason: format!("witchcraft open: {e}"),
+            })?,
+    );
 
     let drainer = Drainer::new(storage.clone(), indexer.clone());
     let drainer_notify: Arc<Notify> = drainer.enqueue_notify();
@@ -163,6 +180,53 @@ async fn wait_for_shutdown_signal() {
 #[cfg(not(unix))]
 async fn wait_for_shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+/// Ensure `<assets_dir>/xtr-weights.gguf` is on disk before opening
+/// the indexer. Task 08 wires the auto-fetch path; task 06 just
+/// surfaces a clear error when the file is missing.
+async fn ensure_weights_present(assets: &std::path::Path) -> Result<(), RuntimeError> {
+    let weights = assets.join("xtr-weights.gguf");
+    if weights.exists() {
+        return Ok(());
+    }
+    auto_fetch_weights(assets).await
+}
+
+#[cfg(unix)]
+async fn auto_fetch_weights(assets: &std::path::Path) -> Result<(), RuntimeError> {
+    log_lifecycle!(kind = kind::STARTUP, info = "fetching xtr-weights.gguf on first start");
+    let bin = std::env::var("SCRYD_FETCH_WEIGHTS_BIN")
+        .unwrap_or_else(|_| "/usr/local/bin/scryd-fetch-weights".to_string());
+    let assets_owned = assets.to_path_buf();
+    let bin_owned = bin.clone();
+    let status = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&bin_owned)
+            .arg("--target")
+            .arg(&assets_owned)
+            .status()
+    })
+    .await
+    .map_err(|e| RuntimeError::PermissionInvariant {
+        path: assets.join("xtr-weights.gguf"),
+        reason: format!("auto-fetch join: {e}"),
+    })?
+    .map_err(|e| RuntimeError::PermissionInvariant {
+        path: assets.join("xtr-weights.gguf"),
+        reason: format!("invoke {bin}: {e}"),
+    })?;
+    if !status.success() {
+        return Err(RuntimeError::PermissionInvariant {
+            path: assets.join("xtr-weights.gguf"),
+            reason: format!("{bin} exited {status}"),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn auto_fetch_weights(_assets: &std::path::Path) -> Result<(), RuntimeError> {
+    Ok(())
 }
 
 fn install_panic_hook() {
