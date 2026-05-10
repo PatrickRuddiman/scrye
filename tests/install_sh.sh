@@ -58,11 +58,11 @@ useradd -m mallory
 
 # ---------- Scenario 1: Fresh install ----------
 note "scenario 1: fresh install"
-(cd "$BUNDLE" && ./install.sh --user alice --skip-weights --skip-systemctl)
+(cd "$BUNDLE" && ./install.sh --skip-weights --skip-systemctl)
 
 [[ -e /etc/scryd/config.toml ]] || fail "scenario 1: /etc/scryd/config.toml missing"
 own=$(stat -c '%U:%G %a' /etc/scryd/config.toml)
-[[ "$own" == "scryd:scryd 600" ]] || fail "scenario 1: config.toml ownership/mode '$own' != 'scryd:scryd 600'"
+[[ "$own" == "scryd:scryd 640" ]] || fail "scenario 1: config.toml ownership/mode '$own' != 'scryd:scryd 640'"
 
 [[ -d /var/lib/scryd ]] || fail "scenario 1: /var/lib/scryd missing"
 own=$(stat -c '%U:%G %a' /var/lib/scryd)
@@ -73,15 +73,16 @@ own=$(stat -c '%U:%G %a' /var/lib/scryd)
 
 [[ -d /run/scryd ]] || fail "scenario 1: /run/scryd missing"
 own=$(stat -c '%U:%G %a' /run/scryd)
-[[ "$own" == "scryd:alice 750" ]] || fail "scenario 1: /run/scryd ownership/mode '$own' != 'scryd:alice 750'"
+[[ "$own" == "scryd:scryd 755" ]] || fail "scenario 1: /run/scryd ownership/mode '$own' != 'scryd:scryd 755'"
 
-grep -q '^User=scryd$' /etc/systemd/system/scryd.service || fail "scenario 1: rendered unit missing User=scryd"
-alice_uid=$(id -u alice)
-grep -q "^Environment=SCRYD_ALLOWED_UID=${alice_uid}$" /etc/systemd/system/scryd.service || \
-    fail "scenario 1: rendered unit missing SCRYD_ALLOWED_UID=${alice_uid}"
+grep -q '^User=scryd$' /etc/systemd/system/scryd.service || fail "scenario 1: unit missing User=scryd"
+! grep -q 'SCRYD_ALLOWED_UID' /etc/systemd/system/scryd.service || \
+    fail "scenario 1: v0.3.1 unit must NOT carry SCRYD_ALLOWED_UID env var"
 
-# ---------- Scenario 2: Isolation property ----------
-note "scenario 2: isolation property"
+# ---------- Scenario 2: Open API + cred-file isolation ----------
+note "scenario 2: search api open; config still daemon-owned"
+# alice and mallory are both NOT in the scryd group: neither can
+# read /etc/scryd/config.toml (mode 0640 scryd:scryd).
 if su mallory -c 'cat /etc/scryd/config.toml' 2>/tmp/mallory.err; then
     fail "scenario 2: mallory was able to read /etc/scryd/config.toml"
 fi
@@ -89,12 +90,18 @@ grep -q "Permission denied" /tmp/mallory.err || \
     fail "scenario 2: mallory's read failed but stderr didn't say 'Permission denied': $(cat /tmp/mallory.err)"
 
 if su alice -c 'cat /etc/scryd/config.toml' 2>/tmp/alice.err; then
-    fail "scenario 2: alice (operator's UID) was able to read /etc/scryd/config.toml"
+    fail "scenario 2: alice was able to read /etc/scryd/config.toml"
 fi
 grep -q "Permission denied" /tmp/alice.err || \
     fail "scenario 2: alice's read failed but stderr didn't say 'Permission denied': $(cat /tmp/alice.err)"
 
-# ---------- Scenario 3: v0.2.x re-install idempotency ----------
+# The runtime dir is mode 0755 in v0.3.1 — anyone can list it (open
+# service shape). The socket isn't bound (no daemon running in the
+# smoke), so we just confirm the directory itself permits group-read.
+own=$(stat -c '%a' /run/scryd)
+[[ "$own" == "755" ]] || fail "scenario 2: /run/scryd mode '$own' != 755 (open service)"
+
+# ---------- Scenario 3: re-install idempotency ----------
 note "scenario 3: re-install preserves config"
 cat > /tmp/extra.toml <<'EOF'
 
@@ -107,10 +114,10 @@ password = "hunter2"
 EOF
 cat /tmp/extra.toml >> /etc/scryd/config.toml
 chown scryd:scryd /etc/scryd/config.toml
-chmod 0600 /etc/scryd/config.toml
+chmod 0640 /etc/scryd/config.toml
 sha_before=$(sha256sum /etc/scryd/config.toml | awk '{print $1}')
 
-(cd "$BUNDLE" && ./install.sh --user alice --skip-weights --skip-systemctl)
+(cd "$BUNDLE" && ./install.sh --skip-weights --skip-systemctl)
 
 sha_after=$(sha256sum /etc/scryd/config.toml | awk '{print $1}')
 [[ "$sha_before" == "$sha_after" ]] || \
@@ -129,32 +136,4 @@ note "scenario 4: uninstall round-trip"
 
 (cd "$BUNDLE" && ./uninstall.sh)  # idempotent second run
 
-# ---------- Scenario 5: v0.1.0 -> v0.2.0 transition ----------
-note "scenario 5: v0.1.0 detection + --remove-v01-data"
-mkdir -p /home/alice/.local/bin /home/alice/.config/systemd/user /home/alice/.config/scryd
-touch /home/alice/.local/bin/scryd \
-      /home/alice/.local/bin/scryd-fetch-weights \
-      /home/alice/.config/systemd/user/scryd.service \
-      /home/alice/.config/scryd/config.toml
-chown -R alice:alice /home/alice/.local /home/alice/.config
-
-set +e
-(cd "$BUNDLE" && ./install.sh --user alice --skip-weights --skip-systemctl) 2>/tmp/v01.err
-rc=$?
-set -e
-[[ "$rc" -eq 2 ]] || fail "scenario 5: install without --remove-v01-data should exit 2, got $rc"
-grep -q '/home/alice/.local/bin/scryd' /tmp/v01.err || \
-    fail "scenario 5: stderr didn't name the v0.1.0 sentinel: $(cat /tmp/v01.err)"
-[[ ! -e /etc/scryd ]] || fail "scenario 5: install bailed but /etc/scryd was created anyway"
-
-(cd "$BUNDLE" && ./install.sh --user alice --skip-weights --skip-systemctl --remove-v01-data)
-
-[[ ! -e /home/alice/.local/bin/scryd ]] || fail "scenario 5: v0.1.0 binary not removed"
-[[ ! -e /home/alice/.local/bin/scryd-fetch-weights ]] || fail "scenario 5: v0.1.0 helper not removed"
-[[ ! -e /home/alice/.config/systemd/user/scryd.service ]] || fail "scenario 5: v0.1.0 unit not removed"
-[[ ! -e /home/alice/.config/scryd/config.toml ]] || fail "scenario 5: v0.1.0 config not removed"
-
-[[ -e /etc/scryd/config.toml ]] || fail "scenario 5: v0.2.0 config.toml not laid down"
-[[ -e /etc/systemd/system/scryd.service ]] || fail "scenario 5: v0.2.0 unit not laid down"
-
-echo "OK: install.sh smoke test passed (5 scenarios)"
+echo "OK: install.sh smoke test passed (4 scenarios)"

@@ -53,12 +53,16 @@ jobs:
           # at a missing binary; stage a no-op executable at the real
           # path to satisfy the check on a fresh runner.
           sudo install -m 0755 /bin/true /usr/local/bin/scryd
-          rendered="$(mktemp -d)/scryd.service"
-          sed -e 's/__UID__/1000/g' -e 's/__USER__/scryd/g' \
-              ops/scryd.service.in > "$rendered"
-          systemd-analyze verify "$rendered"
+          systemd-analyze verify ops/scryd.service.in
           sudo rm /usr/local/bin/scryd
         shell: bash
+
+      - name: cache T5 weights bundle
+        id: cache-weights
+        uses: actions/cache@v4
+        with:
+          path: weights-cache/xtr-weights.gguf
+          key: xtr-weights-${{ hashFiles('crates/scryd-fetch-weights/src/main.rs') }}
 
       - name: cargo test --workspace
         run: cargo test --workspace --target x86_64-unknown-linux-gnu
@@ -79,6 +83,15 @@ jobs:
         run: bash tests/install_sh.sh
         shell: bash
 
+      - name: prime weights cache for e2e
+        run: |
+          set -euo pipefail
+          if [[ -f weights-cache/xtr-weights.gguf ]]; then
+            sudo install -d -o root -g root -m 0755 /var/lib/scryd/assets
+            sudo install -m 0644 weights-cache/xtr-weights.gguf /var/lib/scryd/assets/xtr-weights.gguf
+          fi
+        shell: bash
+
       - name: e2e imap-to-search smoke
         run: |
           # GreenMail is up on the runner's localhost via the services:
@@ -86,4 +99,15 @@ jobs:
           # debian:bookworm container with --network host so the inner
           # container reaches GreenMail at 127.0.0.1:3143.
           bash tests/e2e_imap_to_search.sh
+        shell: bash
+
+      - name: stash weights for next cache save
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -f /var/lib/scryd/assets/xtr-weights.gguf ]]; then
+            mkdir -p weights-cache
+            sudo cp /var/lib/scryd/assets/xtr-weights.gguf weights-cache/xtr-weights.gguf
+            sudo chown "$(id -u)":"$(id -g)" weights-cache/xtr-weights.gguf
+          fi
         shell: bash

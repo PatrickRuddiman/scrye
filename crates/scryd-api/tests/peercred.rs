@@ -1,4 +1,8 @@
 #![cfg(unix)]
+//! Peercred unit tests. As of v0.3.1, peercred enforcement is OPT-IN
+//! via `[server] require_peer_uid = true`; the daemon defaults to an
+//! open socket. These tests still exercise the enforcement path because
+//! that path stays the implementation when the operator turns it on.
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};

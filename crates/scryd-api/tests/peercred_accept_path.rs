@@ -2,6 +2,11 @@
 //! Integration test that exercises the full `check_stream_peer` accept
 //! path against a real Unix domain socket plus the `check_peer_uid`
 //! reject path with the new `expected_uid` log field.
+//!
+//! v0.3.1 default is `require_peer_uid = false` (open socket). These
+//! tests pass `enabled = true` to exercise the opt-in enforcement
+//! path; the off-by-default code path is covered separately by the
+//! handler-level integration tests.
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};

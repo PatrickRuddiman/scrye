@@ -59,13 +59,10 @@ cp ops/scryd.tmpfiles.in "$BUNDLE/scryd.tmpfiles.in"
 cp LICENSE "$BUNDLE/LICENSE"
 chmod +x "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh" "$BUNDLE/scryd" "$BUNDLE/scryd-fetch-weights"
 
-note "creating operator user alice"
-useradd -m alice
-
 note "running install.sh"
-(cd "$BUNDLE" && ./install.sh --user alice --skip-weights --skip-systemctl)
+(cd "$BUNDLE" && ./install.sh --skip-weights --skip-systemctl)
 
-note "writing /etc/scryd/config.toml pointing at GreenMail"
+note "writing /etc/scryd/config.toml pointing at GreenMail (two accounts)"
 cat > /tmp/scryd-config.toml <<'EOF'
 [[accounts]]
 id = "primary"
@@ -75,10 +72,19 @@ user = "test"
 password = "test"
 tls = false
 folders = ["INBOX"]
-EOF
-install -m 0600 -o scryd -g scryd /tmp/scryd-config.toml /etc/scryd/config.toml
 
-note "injecting 50 messages via SMTP"
+[[accounts]]
+id = "secondary"
+host = "127.0.0.1"
+port = 3143
+user = "test"
+password = "test"
+tls = false
+folders = ["INBOX"]
+EOF
+install -m 0640 -o scryd -g scryd /tmp/scryd-config.toml /etc/scryd/config.toml
+
+note "injecting 50 messages via SMTP under 'primary' subject prefix"
 python3 - <<'PY'
 import smtplib
 from email.mime.text import MIMEText
@@ -93,35 +99,29 @@ s.quit()
 print(f'injected 50 messages')
 PY
 
+start_daemon() {
+    # Production runs the daemon as the scryd system user via the
+    # systemd unit. The privileged-docker smoke runs it as root
+    # because rusqlite's bundled SQLite misreports the freshly-
+    # created meta.sqlite as read-only when the uid switches mid-
+    # process via sudo / runuser inside this specific container
+    # layout. See task 09 triage for detail.
+    XDG_CONFIG_HOME=/etc/scryd \
+        XDG_DATA_HOME=/var/lib/scryd \
+        XDG_RUNTIME_DIR=/run/scryd \
+        /usr/local/bin/scryd serve > /tmp/scryd.log 2>&1 &
+    SCRYD_PID=$!
+}
+
 note "starting scryd serve in background"
-ALICE_UID=$(id -u alice)
-# Pre-flight: confirm scryd can actually write to its data dir.
 ls -la /var/lib/scryd
 sudo -u scryd touch /var/lib/scryd/probe-write && echo "scryd write probe OK" && rm /var/lib/scryd/probe-write
-# install.sh --skip-systemctl already created /etc/scryd, /var/lib/scryd,
-# /var/lib/scryd/assets, and /run/scryd at the right ownership / mode.
-# Run the daemon as scryd user with the env vars the systemd unit
-# would normally set.
-# NOTE: production runs the daemon as the scryd system user via the
-# systemd unit (User=scryd / Group=scryd). The privileged-docker
-# smoke harness runs it as root because rusqlite's bundled SQLite
-# misreports the freshly-created meta.sqlite as read-only when the
-# uid switches mid-process via sudo / runuser inside this specific
-# container layout — a known mount-or-sandbox interaction worth a
-# follow-up (target/release/scryd works as scryd under systemd; the
-# scheduler_live integration test exercises the supervisor end-to-
-# end against GreenMail without that issue). See task 09 for detail.
-SCRYD_ALLOWED_UID=$ALICE_UID \
-    XDG_CONFIG_HOME=/etc/scryd \
-    XDG_DATA_HOME=/var/lib/scryd \
-    XDG_RUNTIME_DIR=/run/scryd \
-    /usr/local/bin/scryd serve > /tmp/scryd.log 2>&1 &
-SCRYD_PID=$!
+start_daemon
 
 # Cleanup on exit.
 trap '
-    kill $SCRYD_PID 2>/dev/null || true
-    wait $SCRYD_PID 2>/dev/null || true
+    kill ${SCRYD_PID:-0} 2>/dev/null || true
+    wait ${SCRYD_PID:-0} 2>/dev/null || true
     if [[ -n "${KEEP_LOG:-}" ]]; then
         echo "scryd log:"; cat /tmp/scryd.log || true
     fi
@@ -132,6 +132,9 @@ COUNT=0
 DEADLINE=$(($(date +%s) + 60))
 while [[ $(date +%s) -lt $DEADLINE ]]; do
     COUNT=$(sqlite3 /var/lib/scryd/meta.sqlite 'SELECT count(*) FROM messages' 2>/dev/null || echo 0)
+    # 50 primary + 50 secondary = 100 (each account fetches the same
+    # GreenMail INBOX since they're pointed at the same user). We just
+    # require >= 50 to confirm at least one account is indexing.
     if [[ "$COUNT" -ge 50 ]]; then
         break
     fi
@@ -148,10 +151,8 @@ if [[ "$COUNT" -lt 50 ]]; then
 fi
 note "indexed $COUNT messages"
 
-note "running scryd search as alice"
-HITS_OUT=$(sudo -u alice \
-    XDG_RUNTIME_DIR=/run/scryd \
-    HOME=/home/alice \
+note "running scryd search (open socket; no sudo needed)"
+HITS_OUT=$(XDG_RUNTIME_DIR=/run/scryd \
     /usr/local/bin/scryd search "e2e" --limit 5 --json 2>&1 || true)
 echo "$HITS_OUT"
 
@@ -167,4 +168,54 @@ else
     fail "scryd search did not return JSON hits envelope: $HITS_OUT"
 fi
 
-echo "OK: e2e indexing + search round-trip passed (50 messages, $HIT_COUNT hits)"
+note "filtering by --accounts secondary"
+SECONDARY_OUT=$(XDG_RUNTIME_DIR=/run/scryd \
+    /usr/local/bin/scryd search "e2e" --accounts secondary --limit 50 --json 2>&1 || true)
+echo "$SECONDARY_OUT"
+
+if ! echo "$SECONDARY_OUT" | grep -q '"hits"'; then
+    KEEP_LOG=1
+    fail "secondary-filtered search returned no JSON envelope: $SECONDARY_OUT"
+fi
+SECONDARY_BAD=$(echo "$SECONDARY_OUT" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+print(sum(1 for h in d.get("hits", []) if h.get("account_id") and h["account_id"] != "secondary"))
+' 2>/dev/null || echo unknown)
+if [[ "$SECONDARY_BAD" != "0" ]]; then
+    KEEP_LOG=1
+    fail "secondary-filtered search returned hits with account_id != 'secondary' (count=$SECONDARY_BAD)"
+fi
+note "secondary-filter assertion passed"
+
+note "killing daemon and restarting to prove witchcraft persistence"
+kill -TERM "$SCRYD_PID" 2>/dev/null || true
+wait "$SCRYD_PID" 2>/dev/null || true
+mv /tmp/scryd.log /tmp/scryd.log.pre-restart || true
+start_daemon
+
+# Wait for socket to come back.
+DEADLINE=$(($(date +%s) + 30))
+while [[ $(date +%s) -lt $DEADLINE ]]; do
+    if [[ -S /run/scryd/scryd.sock ]]; then
+        break
+    fi
+    sleep 0.2
+done
+[[ -S /run/scryd/scryd.sock ]] || { KEEP_LOG=1; fail "socket did not return after restart"; }
+
+note "search after restart (no re-fetch needed)"
+POST_OUT=$(XDG_RUNTIME_DIR=/run/scryd \
+    /usr/local/bin/scryd search "e2e" --limit 5 --json 2>&1 || true)
+echo "$POST_OUT"
+if ! echo "$POST_OUT" | grep -q '"hits"'; then
+    KEEP_LOG=1
+    fail "post-restart search did not return JSON envelope: $POST_OUT"
+fi
+POST_HITS=$(echo "$POST_OUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d.get("hits",[])))' 2>/dev/null || echo 0)
+if [[ "$POST_HITS" -lt 1 ]]; then
+    KEEP_LOG=1
+    fail "post-restart search returned 0 hits; witchcraft persistence broken"
+fi
+
+echo "OK: e2e indexing + search round-trip + persistence + account_ids filter passed"
