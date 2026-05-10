@@ -56,8 +56,21 @@ ranked snippets with stable IDs you can fetch the full context for.
 
 ## Install
 
-scryd v0.2.0 ships Linux x86_64 / aarch64 tarballs on the
-[Releases page](https://github.com/PatrickRuddiman/scrye/releases).
+### Requirements
+
+- Linux x86_64 or aarch64 with systemd (Ubuntu 22.04+, Debian 12+,
+  Fedora 36+, Arch). The release tarballs are linked against
+  glibc 2.34+; older distros need to build from source.
+- Root (the installer creates a system user and writes under `/etc`,
+  `/var/lib`, `/usr/local/bin`, and `/etc/systemd/system`).
+- Internet access on first install for `scryd-fetch-weights` to
+  download the T5 weights bundle (~1 GB; SHA-256-verified).
+
+### Quick install
+
+Download the per-arch tarball from the
+[Releases page](https://github.com/PatrickRuddiman/scrye/releases),
+extract, and run the installer:
 
 ```sh
 tar -xzf scryd-vX.Y.Z-x86_64-linux.tar.gz
@@ -65,12 +78,96 @@ cd scryd-vX.Y.Z-x86_64-linux
 sudo ./install.sh
 ```
 
-The installer creates a `scryd` system user, lays out
-`/etc/scryd`, `/var/lib/scryd`, `/run/scryd`, renders the systemd unit,
-fetches the T5 weights, and starts the daemon. See
-[ops/README.install.md](ops/README.install.md) for the full walkthrough
-(sudo install, isolation properties, daily-use commands, journalctl
-recipes, uninstall, v0.1.0 → v0.2.0 migration).
+By default the installer resolves the operator from `$SUDO_USER`. To
+install for a different login (e.g. provisioning a service account):
+
+```sh
+sudo ./install.sh --user alice
+```
+
+What `install.sh` lays down:
+
+| Path | Owner | Mode | Purpose |
+|---|---|---|---|
+| `/usr/local/bin/scryd` | root:root | 0755 | CLI + daemon binary |
+| `/usr/local/bin/scryd-fetch-weights` | root:root | 0755 | weights downloader |
+| `/etc/scryd/config.toml` | scryd:scryd | 0600 | IMAP accounts (operator can't read) |
+| `/var/lib/scryd/` | scryd:scryd | 0700 | meta DB + index |
+| `/var/lib/scryd/assets/` | scryd:scryd | 0755 | T5 weights (mmap) |
+| `/run/scryd/` | scryd:&lt;operator&gt; | 0750 | runtime dir; tmpfiles.d |
+| `/etc/systemd/system/scryd.service` | root:root | 0644 | rendered unit |
+| `/etc/tmpfiles.d/scryd.conf` | root:root | 0644 | rendered drop-in |
+
+### First account
+
+```sh
+sudo scryd add-account
+sudo systemctl restart scryd
+```
+
+The CLI prompts for IMAP host / port / user / password; the password
+is written into `/etc/scryd/config.toml` (which only the daemon's UID
+can read) and the daemon picks up the new account on the next start.
+If the daemon was not yet running, the CLI prints
+`apply changes: sudo systemctl start scryd` instead.
+
+### Verify it's working
+
+```sh
+# Live tail the daemon log.
+journalctl -u scryd -f
+
+# Run a search (no sudo needed; the operator's UID is allowed
+# on the socket).
+scryd search "from:bob"
+
+# Check the index size.
+sudo ls /var/lib/scryd/
+```
+
+### Daily commands
+
+```sh
+# Reads (no sudo)
+scryd search "lunch with bob since:2026-01-01"
+scryd reindex
+
+# Mutations (sudo because only scryd:scryd can write the config;
+# each prints a restart hint)
+sudo scryd add-account
+sudo scryd rotate-password <account-id>
+sudo scryd remove-account <account-id>
+sudo systemctl restart scryd
+```
+
+### Uninstall
+
+```sh
+sudo ./uninstall.sh
+```
+
+Removes the system service, unit file, tmpfiles drop-in, FHS
+directories, binaries, and the `scryd` Linux account. Idempotent.
+
+### v0.1.0 → v0.2.0 migration
+
+v0.1.0 was a per-user install at `~/.local/bin/scryd` +
+`~/.config/scryd/`. v0.2.0 is a system install with a different
+on-disk layout. There is no in-place migration. If `install.sh`
+detects a v0.1.0 layout, it exits 2 and lists the sentinel files
+it found. Re-run with `--remove-v01-data` to wipe each user's
+per-user binary, unit, config and data:
+
+```sh
+sudo ./install.sh --remove-v01-data
+```
+
+After v0.2.0 is in place, run `sudo scryd add-account` with the
+same id and password as before; the daemon resyncs from IMAP.
+
+For the full walkthrough — isolation property table, journalctl
+recipes, multi-user-host caveats — see
+[ops/README.install.md](ops/README.install.md).
 
 ## Isolation
 
@@ -131,15 +228,61 @@ One binary, one system-wide config under `scryd:scryd`, one
 operator-allowed socket. v0.2.0 is single-operator per host; multi-
 operator support is deferred to v0.3.0.
 
+## Local development
+
+Build from source on Linux:
+
+```sh
+git clone https://github.com/PatrickRuddiman/scrye.git
+cd scrye
+cargo build --release -p scryd -p scryd-fetch-weights
+```
+
+The integration test suite hits a real IMAP server. Spin up
+[GreenMail](https://greenmail-mail-test.github.io/greenmail/) in
+Docker, then run `cargo test`:
+
+```sh
+docker run -d --rm --name greenmail \
+  -p 3025:3025 -p 3143:3143 \
+  -e GREENMAIL_OPTS="-Dgreenmail.smtp.hostname=0.0.0.0 -Dgreenmail.smtp.port=3025 \
+                     -Dgreenmail.imap.hostname=0.0.0.0 -Dgreenmail.imap.port=3143 \
+                     -Dgreenmail.users=test:test@localhost -Dgreenmail.auth.disabled" \
+  greenmail/standalone:latest
+
+cargo test --workspace
+```
+
+Tests that require GreenMail skip silently with a stderr hint when the
+container isn't reachable. The full end-to-end smoke (install + index
++ search) runs as:
+
+```sh
+cargo build --release -p scryd -p scryd-fetch-weights
+bash tests/e2e_imap_to_search.sh
+```
+
+## CI
+
+Two GitHub Actions workflows:
+
+- **`ci.yml`** — runs on every push to `main` and every pull request:
+  cargo-deny check, `cargo test --workspace`, install.sh smoke test,
+  end-to-end imap-to-search smoke (50 messages injected via SMTP →
+  scryd indexes → `scryd search` returns hits). GreenMail runs as a
+  GH Actions service container.
+- **`release.yml`** — fires on `v*` tags and `workflow_dispatch`.
+  Same test gates plus per-arch tarball packaging (x86_64 +
+  aarch64), SHA-256 sums, and `gh release create`.
+
 ## Status
 
-scryd is published as a series of testable, committed building blocks:
-storage, MIME parse, witchcraft binding, API handlers, CLI verbs, install
-script, CI release matrix. Most of the pieces are unit/integration-tested;
-the live IMAP connection + daemon orchestration are in progress (see
-`tasks/` for the per-task status). Until those land, `scryd serve` exits
-cleanly with a deferred-integration message, and the CLI verbs talk to the
-UDS but the daemon isn't running yet.
+v0.2.0 (dedicated-UID install) and v0.3.0 (live IMAP indexing,
+scheduler, runtime serve, end-to-end search) are landed. `scryd
+serve` runs the full daemon: scryd-imap supervisor → scryd-mime
+parse → scryd-storage write → scryd-search drainer → axum router
+over UDS. The macOS / Windows ports and multi-operator support
+remain explicitly out of scope.
 
 ## License
 

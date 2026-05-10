@@ -24,8 +24,10 @@ if [[ ! -e /.dockerenv && -z "${SCRYD_E2E_INNER:-}" ]]; then
         echo "FAIL: target/release/scryd missing — run 'cargo build --release -p scryd -p scryd-fetch-weights' first" >&2
         exit 1
     fi
-    if ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^greenmail$'; then
-        echo "FAIL: GreenMail container not running. Start it per the harness comment, then re-run." >&2
+    GMHOST="${SCRYD_TEST_GREENMAIL_HOST:-127.0.0.1}"
+    GMPORT="${SCRYD_TEST_GREENMAIL_IMAP_PORT:-3143}"
+    if ! (exec 3<>"/dev/tcp/${GMHOST}/${GMPORT}") 2>/dev/null; then
+        echo "FAIL: nothing listening on ${GMHOST}:${GMPORT} (expected GreenMail). Start it per the harness comment, then re-run." >&2
         exit 1
     fi
     exec docker run --privileged --rm \

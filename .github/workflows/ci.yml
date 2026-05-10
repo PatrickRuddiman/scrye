@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  license-check:
+    name: license check (cargo deny)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  test:
+    name: cargo test + install + e2e
+    needs: license-check
+    runs-on: ubuntu-22.04
+    services:
+      greenmail:
+        image: greenmail/standalone:latest
+        env:
+          GREENMAIL_OPTS: "-Dgreenmail.smtp.hostname=0.0.0.0 -Dgreenmail.smtp.port=3025 -Dgreenmail.imap.hostname=0.0.0.0 -Dgreenmail.imap.port=3143 -Dgreenmail.users=test:test@localhost -Dgreenmail.auth.disabled"
+        ports:
+          - 3025:3025
+          - 3143:3143
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-x86_64-unknown-linux-gnu
+
+      - name: verify systemd unit template
+        run: |
+          set -euo pipefail
+          rendered="$(mktemp -d)/scryd.service"
+          sed -e 's/__UID__/1000/g' -e 's/__USER__/scryd/g' \
+              ops/scryd.service.in > "$rendered"
+          systemd-analyze verify "$rendered"
+        shell: bash
+
+      - name: cargo test --workspace
+        run: cargo test --workspace --target x86_64-unknown-linux-gnu
+        shell: bash
+
+      - name: cargo build --release
+        run: cargo build --release --target x86_64-unknown-linux-gnu -p scryd -p scryd-fetch-weights
+        shell: bash
+
+      - name: stage release binaries at the path the e2e harness expects
+        run: |
+          mkdir -p target/release
+          cp target/x86_64-unknown-linux-gnu/release/scryd target/release/scryd
+          cp target/x86_64-unknown-linux-gnu/release/scryd-fetch-weights target/release/scryd-fetch-weights
+        shell: bash
+
+      - name: install.sh smoke test
+        run: bash tests/install_sh.sh
+        shell: bash
+
+      - name: e2e imap-to-search smoke
+        run: |
+          # GreenMail is up on the runner's localhost via the services:
+          # block. The harness self-relaunches inside a privileged
+          # debian:bookworm container with --network host so the inner
+          # container reaches GreenMail at 127.0.0.1:3143.
+          bash tests/e2e_imap_to_search.sh
+        shell: bash

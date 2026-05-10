@@ -85,15 +85,21 @@ jobs:
         run: bash tests/install_sh.sh
         shell: bash
 
+      - name: stage release binaries at the path the e2e harness expects
+        if: matrix.cross == false
+        run: |
+          mkdir -p target/release
+          cp target/${{ matrix.target }}/release/scryd target/release/scryd
+          cp target/${{ matrix.target }}/release/scryd-fetch-weights target/release/scryd-fetch-weights
+        shell: bash
+
       - name: e2e imap-to-search smoke
         if: matrix.cross == false
         run: |
-          # GreenMail is up via the services: block; the harness self-
-          # detects /.dockerenv-vs-not and falls through to running
-          # the inner test logic directly when host networking is
-          # already available (CI runners are linux/amd64 with the
-          # service container ports forwarded to the runner host).
-          export SCRYD_E2E_INNER=1
+          # GreenMail is up on the runner's localhost via the services:
+          # block. The harness self-relaunches inside a privileged
+          # debian:bookworm container with --network host so the inner
+          # container reaches GreenMail at 127.0.0.1:3143.
           bash tests/e2e_imap_to_search.sh
         shell: bash
 
