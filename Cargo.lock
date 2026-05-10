@@ -3466,6 +3466,7 @@ dependencies = [
  "mime",
  "nix",
  "scryd-config",
+ "scryd-imap",
  "scryd-log",
  "scryd-search",
  "scryd-storage",

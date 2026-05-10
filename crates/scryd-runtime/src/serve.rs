@@ -107,7 +107,12 @@ pub async fn serve_init() -> Result<ServeContext, RuntimeError> {
 
     let require_peer_uid = api_config.server.require_peer_uid;
     let socket_mode = api_config.server.socket_mode;
-    let app_state = AppState::new(storage, indexer, api_config);
+    let app_state = AppState::with_scheduler(
+        storage,
+        indexer,
+        api_config,
+        Some(scheduler.clone()),
+    );
     let router = api_router(app_state);
 
     let runtime = runtime_dir()?;

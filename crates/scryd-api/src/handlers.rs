@@ -270,6 +270,67 @@ pub async fn handle_accounts(State(state): State<AppState>) -> Response {
     }
 }
 
+/// `GET /status` — daemon uptime + per-account sync state. Open
+/// endpoint; the consumer's higher-layer api decides who can see
+/// what subset.
+pub async fn handle_status(State(state): State<AppState>) -> Response {
+    use serde::Serialize;
+    #[derive(Serialize)]
+    struct AccountStatus {
+        account_id: String,
+        folders: Vec<String>,
+        health: Option<String>,
+        last_sync_unix: Option<i64>,
+        last_seen_uid: Option<u32>,
+    }
+    #[derive(Serialize)]
+    struct StatusResp {
+        ok: bool,
+        uptime_secs: u64,
+        accounts: Vec<AccountStatus>,
+    }
+
+    let accounts = match state.storage.list_active_accounts().await {
+        Ok(a) => a,
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                &e.to_string(),
+            );
+        }
+    };
+
+    let mut out = Vec::new();
+    for a in accounts {
+        let primary_folder = a
+            .folders
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "INBOX".to_string());
+        let sync = state
+            .storage
+            .get_sync_state(&a.account_id, &primary_folder)
+            .await
+            .ok()
+            .flatten();
+        out.push(AccountStatus {
+            account_id: a.account_id,
+            folders: a.folders,
+            health: sync.as_ref().map(|s| format!("{:?}", s.account_health)),
+            last_sync_unix: sync.as_ref().and_then(|s| s.last_full_sync_at),
+            last_seen_uid: sync.as_ref().map(|s| s.last_seen_uid),
+        });
+    }
+
+    Json(StatusResp {
+        ok: true,
+        uptime_secs: state.started_at.elapsed().as_secs(),
+        accounts: out,
+    })
+    .into_response()
+}
+
 // Need this so Mode::from_str works in the search handler.
 fn _force_mode_fromstr_inscope() -> Result<Mode, String> {
     Mode::from_str("fulltext")

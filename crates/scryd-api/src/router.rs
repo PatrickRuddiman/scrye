@@ -23,6 +23,7 @@ pub fn router(state: AppState) -> Router {
         .route("/message/:id/raw", get(handlers::handle_raw))
         .route("/thread/:id", get(handlers::handle_thread))
         .route("/accounts", get(handlers::handle_accounts))
+        .route("/status", get(handlers::handle_status))
         .route("/sync", post(handlers_write::handle_sync))
         .route("/internal/reindex", post(handlers_write::handle_reindex))
         .route(

@@ -23,6 +23,7 @@ scryd-log = { path = "../scryd-log" }
 scryd-storage = { path = "../scryd-storage" }
 scryd-search = { path = "../scryd-search" }
 scryd-config = { path = "../scryd-config" }
+scryd-imap = { path = "../scryd-imap" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 mime = "0.3"
 

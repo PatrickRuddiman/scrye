@@ -24,19 +24,24 @@ struct SyncScopeDto {
     accounts: Vec<String>,
 }
 
-/// `POST /sync` — request an immediate sync pass against every healthy
-/// account. v1 returns the active-account list as the scope; once the
-/// scheduler is wired in, request_pass() will replace this with the
-/// actually-signaled subset (excludes accounts in backoff).
+/// `POST /sync` — request an immediate sync pass against every
+/// healthy supervisor. When the scheduler is wired (production),
+/// returns the (account_id/folder) pairs that were actually
+/// signaled. Falls back to the active-account list from storage
+/// when the scheduler isn't available (api-only tests).
 pub async fn handle_sync(State(state): State<AppState>) -> Response {
-    let accounts = match state.storage.list_active_accounts().await {
-        Ok(rows) => rows.into_iter().map(|a| a.account_id).collect::<Vec<_>>(),
-        Err(e) => {
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                &e.to_string(),
-            );
+    let accounts = if let Some(sched) = state.scheduler.as_ref() {
+        sched.request_pass().await
+    } else {
+        match state.storage.list_active_accounts().await {
+            Ok(rows) => rows.into_iter().map(|a| a.account_id).collect::<Vec<_>>(),
+            Err(e) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    &e.to_string(),
+                );
+            }
         }
     };
     (

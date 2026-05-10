@@ -39,6 +39,12 @@ enum Verb {
     /// Trigger a full reindex on the running daemon.
     Reindex,
 
+    /// Trigger an immediate sync pass against every configured account.
+    Sync,
+
+    /// Print daemon uptime + per-account sync state.
+    Status,
+
     /// Run a search query against the running daemon.
     Search(SearchArgs),
 
@@ -111,11 +117,83 @@ fn main() {
     match cli.verb {
         Verb::Serve => run_serve(),
         Verb::Reindex => run_reindex(),
+        Verb::Sync => run_sync(),
+        Verb::Status => run_status(),
         Verb::Search(args) => run_search(args),
         Verb::AddAccount(args) => run_add_account(args),
         Verb::RotatePassword(args) => run_rotate_password(args),
         Verb::RemoveAccount(args) => run_remove_account(args),
     }
+}
+
+fn run_sync() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let client = match uds_client::UdsClient::from_env() {
+            Ok(c) => c,
+            Err(uds_client::ClientError::DaemonNotRunning(_)) => bail(
+                ExitCode::DaemonNotRunning,
+                "daemon-not-running",
+                "scryd is not running. Start it with: sudo systemctl start scryd",
+            ),
+            Err(e) => bail(e.exit_code(), "error", &e.to_string()),
+        };
+        match client.post("/sync").await {
+            Ok(resp) if resp.status == 202 => {
+                let body = String::from_utf8_lossy(&resp.body);
+                println!("{body}");
+            }
+            Ok(resp) => bail(
+                ExitCode::DaemonRejected,
+                "daemon-rejected",
+                &format!("status {}", resp.status),
+            ),
+            Err(uds_client::ClientError::DaemonNotRunning(_)) => bail(
+                ExitCode::DaemonNotRunning,
+                "daemon-not-running",
+                "scryd is not running",
+            ),
+            Err(e) => bail(e.exit_code(), "error", &e.to_string()),
+        }
+    });
+}
+
+fn run_status() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let client = match uds_client::UdsClient::from_env() {
+            Ok(c) => c,
+            Err(uds_client::ClientError::DaemonNotRunning(_)) => bail(
+                ExitCode::DaemonNotRunning,
+                "daemon-not-running",
+                "scryd is not running. Start it with: sudo systemctl start scryd",
+            ),
+            Err(e) => bail(e.exit_code(), "error", &e.to_string()),
+        };
+        match client.get("/status").await {
+            Ok(resp) if resp.status == 200 => {
+                let body = String::from_utf8_lossy(&resp.body);
+                println!("{body}");
+            }
+            Ok(resp) => bail(
+                ExitCode::DaemonRejected,
+                "daemon-rejected",
+                &format!("status {}", resp.status),
+            ),
+            Err(uds_client::ClientError::DaemonNotRunning(_)) => bail(
+                ExitCode::DaemonNotRunning,
+                "daemon-not-running",
+                "scryd is not running",
+            ),
+            Err(e) => bail(e.exit_code(), "error", &e.to_string()),
+        }
+    });
 }
 
 fn run_serve() {
@@ -460,22 +538,40 @@ fn print_restart_hint() {
         .enable_all()
         .build()
         .unwrap();
-    let reachable = rt.block_on(async {
+    let outcome = rt.block_on(async {
         let client = match uds_client::UdsClient::from_env() {
             Ok(c) => c,
-            Err(_) => return false,
+            Err(_) => return ReconcileOutcome::DaemonNotRunning,
         };
-        match client.get("/accounts").await {
-            Ok(_) => true,
-            Err(uds_client::ClientError::DaemonNotRunning(_)) => false,
-            Err(_) => true,
+        // v0.3.1: try /internal/reconcile so add-account / rotate /
+        // remove are picked up without manual restart. Falls back to
+        // the restart hint if the daemon rejects or is unreachable.
+        match client.post("/internal/reconcile").await {
+            Ok(resp) if (200..300).contains(&resp.status) => ReconcileOutcome::Applied,
+            Ok(_) => ReconcileOutcome::Reachable,
+            Err(uds_client::ClientError::DaemonNotRunning(_)) => {
+                ReconcileOutcome::DaemonNotRunning
+            }
+            Err(_) => ReconcileOutcome::Reachable,
         }
     });
-    if reachable {
-        println!("apply changes: sudo systemctl restart scryd");
-    } else {
-        println!("apply changes: sudo systemctl start scryd");
+    match outcome {
+        ReconcileOutcome::Applied => {
+            println!("changes picked up by daemon (no restart needed)");
+        }
+        ReconcileOutcome::Reachable => {
+            println!("apply changes: sudo systemctl restart scryd");
+        }
+        ReconcileOutcome::DaemonNotRunning => {
+            println!("apply changes: sudo systemctl start scryd");
+        }
     }
+}
+
+enum ReconcileOutcome {
+    Applied,
+    Reachable,
+    DaemonNotRunning,
 }
 
 fn prompt_required(label: &str) -> String {

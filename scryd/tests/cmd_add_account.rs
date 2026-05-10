@@ -106,7 +106,7 @@ fn flag_path_writes_config_and_dispatches_reconcile() {
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("saved to"), "{stdout}");
-        assert!(stdout.contains("sudo systemctl restart scryd"), "{stdout}");
+        assert!(stdout.contains("picked up by daemon"), "{stdout}");
 
         let config_path = home.path().join(".config/scryd/config.toml");
         assert!(config_path.exists(), "config.toml must exist");
@@ -308,7 +308,7 @@ fn add_account_with_root_writes_config_and_prints_restart_hint() {
         .unwrap();
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("sudo systemctl restart scryd"), "{stdout}");
+        assert!(stdout.contains("picked up by daemon"), "{stdout}");
     });
 }
 
