@@ -137,7 +137,12 @@ fn run_reindex() {
     rt.block_on(async {
         let client = match uds_client::UdsClient::from_env() {
             Ok(c) => c,
-            Err(e) => bail(ExitCode::Error, "error", &e.to_string()),
+            Err(uds_client::ClientError::DaemonNotRunning(_)) => bail(
+                ExitCode::DaemonNotRunning,
+                "daemon-not-running",
+                "scryd is not running for this user. Start it with: sudo systemctl start scryd",
+            ),
+            Err(e) => bail(e.exit_code(), "error", &e.to_string()),
         };
         match client.post("/internal/reindex").await {
             Ok(resp) if resp.status == 202 => {
@@ -180,7 +185,12 @@ fn run_search(args: SearchArgs) {
     rt.block_on(async {
         let client = match uds_client::UdsClient::from_env() {
             Ok(c) => c,
-            Err(e) => bail(ExitCode::Error, "error", &e.to_string()),
+            Err(uds_client::ClientError::DaemonNotRunning(_)) => bail(
+                ExitCode::DaemonNotRunning,
+                "daemon-not-running",
+                "scryd is not running for this user. Start it with: sudo systemctl start scryd",
+            ),
+            Err(e) => bail(e.exit_code(), "error", &e.to_string()),
         };
 
         let url = build_search_url(&args);
