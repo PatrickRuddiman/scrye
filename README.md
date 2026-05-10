@@ -149,25 +149,8 @@ sudo ./uninstall.sh
 Removes the system service, unit file, tmpfiles drop-in, FHS
 directories, binaries, and the `scryd` Linux account. Idempotent.
 
-### v0.1.0 → v0.2.0 migration
-
-v0.1.0 was a per-user install at `~/.local/bin/scryd` +
-`~/.config/scryd/`. v0.2.0 is a system install with a different
-on-disk layout. There is no in-place migration. If `install.sh`
-detects a v0.1.0 layout, it exits 2 and lists the sentinel files
-it found. Re-run with `--remove-v01-data` to wipe each user's
-per-user binary, unit, config and data:
-
-```sh
-sudo ./install.sh --remove-v01-data
-```
-
-After v0.2.0 is in place, run `sudo scryd add-account` with the
-same id and password as before; the daemon resyncs from IMAP.
-
-For the full walkthrough — isolation property table, journalctl
-recipes, multi-user-host caveats — see
-[ops/README.install.md](ops/README.install.md).
+For more — isolation property table, journalctl recipes, full
+walkthrough — see [ops/README.install.md](ops/README.install.md).
 
 ## Isolation
 
@@ -179,8 +162,7 @@ tries to open the file. The operator still reaches the daemon over
 `/run/scryd/scryd.sock` (group-readable to the operator), which is how
 search queries arrive without exposing the IMAP password. See
 [ops/README.install.md](ops/README.install.md#isolation-properties)
-for the full table and [scryd-spec-v0.2.0.md](scryd-spec-v0.2.0.md)
-for the threat model.
+for the full property table.
 
 ## Use
 
@@ -225,8 +207,7 @@ GET /message/<id>/raw
 ```
 
 One binary, one system-wide config under `scryd:scryd`, one
-operator-allowed socket. v0.2.0 is single-operator per host; multi-
-operator support is deferred to v0.3.0.
+operator-allowed socket. Single-operator per host.
 
 ## Local development
 
@@ -274,15 +255,6 @@ Two GitHub Actions workflows:
 - **`release.yml`** — fires on `v*` tags and `workflow_dispatch`.
   Same test gates plus per-arch tarball packaging (x86_64 +
   aarch64), SHA-256 sums, and `gh release create`.
-
-## Status
-
-v0.2.0 (dedicated-UID install) and v0.3.0 (live IMAP indexing,
-scheduler, runtime serve, end-to-end search) are landed. `scryd
-serve` runs the full daemon: scryd-imap supervisor → scryd-mime
-parse → scryd-storage write → scryd-search drainer → axum router
-over UDS. The macOS / Windows ports and multi-operator support
-remain explicitly out of scope.
 
 ## License
 
