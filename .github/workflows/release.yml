@@ -60,10 +60,15 @@ jobs:
       - name: verify systemd unit template
         run: |
           set -euo pipefail
+          # systemd-analyze verify rejects the unit if ExecStart points
+          # at a missing binary; stage a no-op executable at the real
+          # path to satisfy the check on a fresh runner.
+          sudo install -m 0755 /bin/true /usr/local/bin/scryd
           rendered="$(mktemp -d)/scryd.service"
           sed -e 's/__UID__/1000/g' -e 's/__USER__/scryd/g' \
               ops/scryd.service.in > "$rendered"
           systemd-analyze verify "$rendered"
+          sudo rm /usr/local/bin/scryd
         shell: bash
 
       - name: cargo test --workspace
