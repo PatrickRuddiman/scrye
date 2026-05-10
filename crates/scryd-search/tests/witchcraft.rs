@@ -55,6 +55,7 @@ async fn round_trip_submit_and_search() {
             q: "invoice".into(),
             mode: Mode::FullText,
             k: 5,
+            account_ids: Vec::new(),
         })
         .await
         .expect("search");
@@ -89,6 +90,7 @@ async fn truncate_clears_the_index() {
             q: "body".into(),
             mode: Mode::FullText,
             k: 5,
+            account_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -124,6 +126,7 @@ async fn remove_drops_a_single_message() {
             q: "doomed".into(),
             mode: Mode::FullText,
             k: 5,
+            account_ids: Vec::new(),
         })
         .await
         .unwrap();

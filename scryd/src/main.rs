@@ -92,6 +92,12 @@ struct SearchArgs {
     folder: Option<String>,
     #[arg(long)]
     account: Option<String>,
+    /// Multi-value account scope. `--accounts foo,bar` returns hits
+    /// only from those accounts. Empty / absent = all accounts. The
+    /// consumer's higher-layer api drives this from per-end-user
+    /// policy; scryd does not enforce it itself.
+    #[arg(long, value_delimiter = ',')]
+    accounts: Option<Vec<String>>,
     #[arg(long, default_value_t = 20)]
     limit: usize,
     #[arg(long, value_parser = ["fulltext", "semantic", "hybrid"], default_value = "fulltext")]
@@ -252,6 +258,13 @@ fn build_search_url(args: &SearchArgs) -> String {
     if let Some(v) = &args.account {
         url.push_str("&account=");
         url.push_str(&urlencoding::encode(v));
+    }
+    if let Some(ids) = &args.accounts {
+        let joined = ids.join(",");
+        if !joined.is_empty() {
+            url.push_str("&account_ids=");
+            url.push_str(&urlencoding::encode(&joined));
+        }
     }
     url.push_str(&format!("&limit={}", args.limit));
     url.push_str(&format!("&mode={}", args.mode));

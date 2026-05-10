@@ -24,6 +24,7 @@ async fn submit_then_search_returns_match() {
             q: "invoice".to_string(),
             mode: Mode::FullText,
             k: 10,
+            account_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -46,6 +47,7 @@ async fn duplicate_submit_replaces_existing_document() {
             q: "two".to_string(),
             mode: Mode::FullText,
             k: 10,
+            account_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -65,6 +67,7 @@ async fn remove_deletes_document() {
             q: "remove".to_string(),
             mode: Mode::FullText,
             k: 10,
+            account_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -101,6 +104,7 @@ async fn search_orders_by_term_count() {
             q: "invoice".to_string(),
             mode: Mode::FullText,
             k: 10,
+            account_ids: Vec::new(),
         })
         .await
         .unwrap();
@@ -122,6 +126,7 @@ async fn search_respects_k_limit() {
             q: "common".to_string(),
             mode: Mode::FullText,
             k: 3,
+            account_ids: Vec::new(),
         })
         .await
         .unwrap();

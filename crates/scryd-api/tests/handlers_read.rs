@@ -149,6 +149,33 @@ async fn search_filter_by_account_excludes_non_matching() {
 }
 
 #[tokio::test]
+async fn search_account_ids_multi_value_includes_matching() {
+    let (_d, state) = setup().await;
+    // The fixture seeds messages under account_id "primary"; the
+    // multi-value filter `?account_ids=primary,nonexistent` must
+    // still include them.
+    let (status, body, _) =
+        request(state, "/search?q=invoice&account_ids=primary,nonexistent").await;
+    assert_eq!(status, StatusCode::OK);
+    let v = parse_json(&body);
+    let hits = v["hits"].as_array().unwrap();
+    assert!(!hits.is_empty(), "expected at least one hit for primary");
+    for h in hits {
+        let id = h["account_id"].as_str().unwrap();
+        assert!(id == "primary" || id == "nonexistent", "got account_id={id}");
+    }
+}
+
+#[tokio::test]
+async fn search_account_ids_excludes_when_no_matching_id() {
+    let (_d, state) = setup().await;
+    let (status, body, _) = request(state, "/search?q=invoice&account_ids=foo,bar").await;
+    assert_eq!(status, StatusCode::OK);
+    let v = parse_json(&body);
+    assert_eq!(v["hits"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
 async fn message_returns_full_shape() {
     let (_d, state) = setup().await;
     let (status, body, _) =

@@ -62,12 +62,33 @@ pub async fn handle_search(
     let limit = q.limit.unwrap_or(LIMIT_DEFAULT).clamp(1, LIMIT_MAX);
     let k = std::cmp::max(limit * K_MULTIPLIER, K_MIN);
 
+    // Caller-driven account scope. `account_ids` (multi) takes
+    // precedence; the legacy single-value `account` is folded in if
+    // present and not already covered.
+    let mut account_ids: Vec<String> = q
+        .account_ids
+        .as_deref()
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(legacy) = q.account.as_deref() {
+        if !legacy.is_empty() && !account_ids.iter().any(|id| id == legacy) {
+            account_ids.push(legacy.to_string());
+        }
+    }
+
     let search_resp = match state
         .searcher
         .search(&SearchQuery {
             q: q.q.clone(),
             mode,
             k,
+            account_ids: account_ids.clone(),
         })
         .await
     {
@@ -88,7 +109,7 @@ pub async fn handle_search(
             Ok(Some(r)) if r.tombstoned_at.is_none() => r,
             _ => continue,
         };
-        if !filter_match(&row, &q, since_ts, until_ts) {
+        if !filter_match(&row, &q, &account_ids, since_ts, until_ts) {
             continue;
         }
         let snippet = derive_snippet(&row.body_md, &hit.semantic_snippet, &q.q, mode);
@@ -121,6 +142,7 @@ pub async fn handle_search(
 fn filter_match(
     row: &scryd_storage::MessageRow,
     q: &SearchQueryDto,
+    account_ids: &[String],
     since_ts: Option<i64>,
     until_ts: Option<i64>,
 ) -> bool {
@@ -134,10 +156,8 @@ fn filter_match(
             return false;
         }
     }
-    if let Some(account) = q.account.as_deref() {
-        if row.account_id != account {
-            return false;
-        }
+    if !account_ids.is_empty() && !account_ids.iter().any(|id| id == &row.account_id) {
+        return false;
     }
     if let Some(s) = since_ts {
         if row.date_unix < s {

@@ -47,8 +47,9 @@ impl std::fmt::Display for MessageId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Mode {
+    #[default]
     FullText,
     Semantic,
     Hybrid,
@@ -90,11 +91,16 @@ pub struct IndexSubmit {
 }
 
 /// What the api slice asks the indexer for.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SearchQuery {
     pub q: String,
     pub mode: Mode,
     pub k: usize,
+    /// Caller-driven account scope. Empty = all accounts. Non-empty
+    /// = only return hits whose `account_id` is in this set. The
+    /// consumer's higher-layer api populates this from whatever
+    /// per-end-user policy it enforces.
+    pub account_ids: Vec<String>,
 }
 
 /// Single search hit. The api slice fills in metadata and snippet from

@@ -275,5 +275,6 @@ async fn unused_helpers_silence_compiler() {
         q: String::new(),
         mode: Mode::FullText,
         k: 0,
+            account_ids: Vec::new(),
     };
 }
