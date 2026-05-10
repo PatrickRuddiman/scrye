@@ -109,26 +109,7 @@ directory tree (`/etc/scryd`, `/var/lib/scryd`, `/run/scryd`), the
 binaries, and the `scryd` Linux account. Idempotent: a second run
 prints `nothing was installed`.
 
-## v0.1.0 → v0.2.0 migration
-
-v0.1.0 was a per-user install at `~/.local/bin/scryd` +
-`~/.config/scryd/`. v0.2.0 is a system install with a different
-on-disk layout. There is no in-place migration of the v0.1.0 index
-(see `scryd-spec-v0.2.0.md` §3 Out).
-
-If `install.sh` detects a v0.1.0 layout for any user on the host, it
-exits 2 and lists the sentinel files it found. Re-run with
-`--remove-v01-data` to wipe each user's per-user binary, unit, config
-and data:
-
-```sh
-sudo ./install.sh --remove-v01-data
-```
-
-After v0.2.0 is in place, run `sudo scryd add-account` with the same
-account id and password as before; the daemon resyncs from IMAP.
-
-## v0.2.x → v0.2.(x+1) upgrade
+## Upgrade
 
 Re-run the installer:
 
@@ -136,15 +117,25 @@ Re-run the installer:
 sudo ./install.sh
 ```
 
-`install.sh` is idempotent on a v0.2.x host. The binary and unit are
-replaced; `/etc/scryd/config.toml`, `/var/lib/scryd/`, and the index
-are preserved. systemd restarts the daemon on the unit reload.
+`install.sh` is idempotent. The binary and unit are replaced;
+`/etc/scryd/config.toml`, `/var/lib/scryd/`, and the witchcraft
+index at `/var/lib/scryd/witchcraft.sqlite` are preserved. systemd
+restarts the daemon on the unit reload.
 
-## Multi-user hosts
+## Multi-tenant deploys
 
-v0.2.0 is single-operator per host. If you need multiple operators
-sharing one daemon, that's deferred to v0.3.0 (see `scryd-spec-v0.2.0.md`
-§3 Out). Today, run multiple Linux hosts or VMs.
+scryd is open by default — anyone who can reach the socket can
+query the full index. The consumer's higher-layer API service is
+the auth boundary: it authenticates end-users, decides which
+`account_ids` each is allowed to see, and passes that filter
+(`?account_ids=a,b,c`) on every search call. Empty filter = all
+accounts. See `docs/security.md` for the full posture.
+
+If you want kernel-level access control on the socket as
+defense-in-depth, set `[server] socket_mode = 0o660` in
+`/etc/scryd/config.toml` and place the consumer's user in the
+`scryd` group; or set `[server] require_peer_uid = true` to
+recover v0.2.0's same-uid-only posture.
 
 ## glibc requirement
 

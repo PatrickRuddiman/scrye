@@ -1,36 +1,34 @@
 # scryd
 
-**Turn your email into a searchable dataset AI agents can read.**
+**An IMAP indexer + search service. Install once per server, link any number of accounts, query an open API tagged by `account_id`.**
 
-scryd is a read-only IMAP indexer + search daemon for Linux. It connects
-to your mail account, mirrors the messages into a local SQLite store +
-[witchcraft](https://github.com/dropbox/witchcraft)-backed semantic index,
-and exposes a small HTTP API on a Unix-domain socket that local CLIs and
-AI agents query against.
-
-The point: an agent that needs context about a project, a person, a thread,
-or a contract can pose a natural-language question and get back the
-conversations that matter — with citations to the source messages — without
-ever holding your mailbox credential.
+scryd is a Linux service. Operators install it on a server, configure
+`[[accounts]]` in `/etc/scryd/config.toml`, and let it index continuously
+in the background via IMAP IDLE + a [witchcraft](https://github.com/dropbox/witchcraft)-backed
+semantic index. The HTTP-over-UDS API is open by default — anyone who can
+reach `/run/scryd/scryd.sock` can query the full index. The consumer's
+higher-layer API service is the auth boundary: it authenticates end-users,
+decides which `account_ids` each is allowed to see, and passes that filter
+on every search call.
 
 ## What it does
 
 - **Indexes mail in the background.** scryd connects to IMAP using an app
-  password, fetches messages, parses MIME, converts HTML to Markdown, and
-  writes everything into `/var/lib/scryd/`.
-- **Serves search over a local socket.** Agents and CLIs talk to scryd over
-  `/run/scryd/scryd.sock`. The socket is peercred-checked: only the
-  operator's UID can connect.
-- **Three search modes.** `fulltext` (FTS5 keyword), `semantic` (T5 XTR
-  embeddings via witchcraft), and `hybrid` (RRF fusion of the two).
+  password (per account), fetches messages, parses MIME, converts HTML to
+  Markdown, and writes everything into `/var/lib/scryd/` + a persistent
+  witchcraft index at `/var/lib/scryd/witchcraft.sqlite`.
+- **Serves search over a local socket.** `/run/scryd/scryd.sock` mode 0666
+  by default; configurable via `[server] socket_mode`.
+- **Multi-account by design.** Documents carry their `account_id`; the
+  search API takes a multi-value `?account_ids=a,b,c` filter so the
+  consumer can scope each query.
+- **Three search modes.** `fulltext` (BM25), `semantic` (T5 XTR embeddings
+  via witchcraft), and `hybrid` (RRF fusion of the two).
 - **Filters by sender, folder, account, and date range.** Same filter chain
   in every mode.
-- **Returns full message bodies, threads, and raw `.eml` source** for the
-  matches the agent needs to read.
-- **Keeps the IMAP credential out of the operator's reach.** The daemon
-  runs under a dedicated `scryd` system user; `/etc/scryd/config.toml` is
-  mode 0600 owned by that user. The operator's shell, agents, and MCP
-  servers can search but cannot read the password.
+- **Returns full message bodies, threads, and raw `.eml` source.**
+- **No auth at the scryd layer.** Auth is the consumer's job — see
+  [`docs/security.md`](docs/security.md) for the threat model.
 
 ## Why an agent should use it
 
@@ -152,17 +150,22 @@ directories, binaries, and the `scryd` Linux account. Idempotent.
 For more — isolation property table, journalctl recipes, full
 walkthrough — see [ops/README.install.md](ops/README.install.md).
 
-## Isolation
+## Security posture
 
-The daemon runs as a dedicated `scryd` system user, which is what makes
-the credential isolation possible: `/etc/scryd/config.toml` is mode
-0600 owned by `scryd:scryd`, so any process running as the operator's
-UID — interactive shells, agents, MCP servers — gets `EACCES` when it
-tries to open the file. The operator still reaches the daemon over
-`/run/scryd/scryd.sock` (group-readable to the operator), which is how
-search queries arrive without exposing the IMAP password. See
-[ops/README.install.md](ops/README.install.md#isolation-properties)
-for the full property table.
+scryd is open by default: anyone who can reach `/run/scryd/scryd.sock`
+can call the API. The dedicated `scryd` system user owns the config
+file and the index, so non-root non-`scryd`-group users still can't
+read the IMAP credential at rest — but the search API has no auth.
+
+**The consumer's API is the auth boundary.** It authenticates
+end-users, decides which `account_ids` each is allowed to see, and
+passes that filter on every search call (`?account_ids=a,b,c`).
+Empty filter = all accounts.
+
+See [`docs/security.md`](docs/security.md) for the full threat model
+and the consumer's checklist. Hardening knobs (`[server]
+require_peer_uid = true`, `socket_mode = 0o660`) live in
+[`scryd-spec.md`](scryd-spec.md).
 
 ## Use
 
@@ -171,7 +174,9 @@ for the full property table.
 ```sh
 scryd search "annual invoice from acme"
 scryd search "birthday plans" --since 2026-01-01 --mode semantic --limit 10
-scryd search "contract terms" --account work --folder INBOX --json
+scryd search "contract terms" --accounts work,personal --folder INBOX --json
+scryd sync                              # signal every supervisor
+scryd status                            # daemon uptime + per-account state
 ```
 
 ### From an agent
@@ -181,6 +186,7 @@ talks to the UDS directly:
 
 ```
 GET /search?q=annual%20invoice&mode=hybrid&limit=10
+GET /search?q=invoice&account_ids=alice-personal,support-inbox
 ```
 
 Returns ranked hits with `message_id`, `score`, snippet, sender, subject,
@@ -197,17 +203,18 @@ GET /message/<id>/raw
 ## Architecture in one breath
 
 ```
-   IMAP server  ──IDLE/poll──▶  scryd  ──UDS──▶  CLI / agent
-                                  │              (operator UID)
-                       ┌──────────┴──────────┐
+   IMAP server(s) ──IDLE/poll──▶  scryd  ──UDS──▶  consumer's API ──▶ end-user
+                                    │              (open socket; consumer
+                       ┌────────────┴────────┐      filters by account_ids)
                        ▼                     ▼
-                meta.sqlite +           witchcraft
-                raw .eml store      (T5 XTR embeddings)
-                  (scryd:scryd UID)
+                meta.sqlite +           witchcraft.sqlite
+                raw .eml store          (persistent T5 XTR
+                  (scryd:scryd)          embeddings)
 ```
 
-One binary, one system-wide config under `scryd:scryd`, one
-operator-allowed socket. Single-operator per host.
+One scryd install per server. N IMAP accounts. Each indexed
+document carries its `account_id`. Consumer's higher-layer API is
+the auth boundary.
 
 ## Local development
 
