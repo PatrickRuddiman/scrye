@@ -234,7 +234,12 @@ fn invalid_account_id_regex_rejected_with_bad_input() {
 }
 
 #[test]
-fn add_account_without_root_exits_bad_input() {
+fn add_account_writes_config_without_explicit_root_check() {
+    // v0.3.1: the explicit cli_effective_euid != 0 bail is gone.
+    // A non-root invocation that has write access to the resolved
+    // config path (here: a tempdir under HOME) succeeds; chown to
+    // scryd is best-effort and silently no-ops when not running as
+    // root.
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
     let output = scryd()
@@ -257,9 +262,16 @@ fn add_account_without_root_exits_bad_input() {
         .write_stdin("hunter2\n")
         .output()
         .expect("run");
-    assert_eq!(output.status.code(), Some(4));
+    assert!(
+        output.status.success(),
+        "expected exit 0; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("requires root"), "stderr was: {stderr}");
+    assert!(!stderr.contains("requires root"), "elevation error leaked: {stderr}");
+
+    let config_path = home.path().join(".config/scryd/config.toml");
+    assert!(config_path.exists(), "config.toml must exist");
 }
 
 #[test]

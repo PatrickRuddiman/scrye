@@ -262,14 +262,6 @@ fn run_add_account(args: AddAccountArgs) {
     use std::io::{BufRead, Read, Write};
     use std::path::PathBuf;
 
-    if cli_effective_euid() != 0 {
-        bail(
-            ExitCode::BadInput,
-            "bad-input",
-            "add-account requires root (try: sudo scryd add-account ...)",
-        );
-    }
-
     let id_re = regex::Regex::new(r"^[a-z0-9_-]+$").expect("valid regex");
 
     // Resolve fields from flags or interactive prompts.
@@ -345,14 +337,6 @@ fn run_add_account(args: AddAccountArgs) {
 fn run_rotate_password(args: RotatePasswordArgs) {
     use std::io::Read;
 
-    if cli_effective_euid() != 0 {
-        bail(
-            ExitCode::BadInput,
-            "bad-input",
-            "rotate-password requires root (try: sudo scryd rotate-password ...)",
-        );
-    }
-
     let id_re = regex::Regex::new(r"^[a-z0-9_-]+$").expect("valid regex");
     if !id_re.is_match(&args.account_id) {
         bail(
@@ -389,14 +373,6 @@ fn run_rotate_password(args: RotatePasswordArgs) {
 
 fn run_remove_account(args: RemoveAccountArgs) {
     use std::io::{BufRead, Write};
-
-    if cli_effective_euid() != 0 {
-        bail(
-            ExitCode::BadInput,
-            "bad-input",
-            "remove-account requires root (try: sudo scryd remove-account ...)",
-        );
-    }
 
     let id_re = regex::Regex::new(r"^[a-z0-9_-]+$").expect("valid regex");
     if !id_re.is_match(&args.account_id) {
@@ -451,9 +427,13 @@ fn cli_effective_euid() -> u32 {
 }
 
 /// Chown the freshly-written config to `scryd:scryd` so the daemon
-/// (running under that uid) can read it. Silently no-ops in test
-/// environments where the `scryd` system user does not exist.
+/// (running under that uid) can read it. Best-effort: silently
+/// no-ops when the `scryd` system user does not exist (test envs)
+/// or when the caller's euid is not root (chown would fail anyway).
 fn chown_to_scryd(path: &std::path::Path) {
+    if cli_effective_euid() != 0 {
+        return;
+    }
     if let Ok(Some(user)) = nix::unistd::User::from_name("scryd") {
         let _ = nix::unistd::chown(path, Some(user.uid), Some(user.gid));
     }

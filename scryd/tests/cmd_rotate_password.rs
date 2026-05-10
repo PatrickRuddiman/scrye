@@ -37,7 +37,8 @@ fn write_fixture(home: &TempDir) -> std::path::PathBuf {
 }
 
 #[test]
-fn rotate_password_without_root_exits_bad_input() {
+fn rotate_password_writes_without_explicit_root_check() {
+    // v0.3.1: the explicit cli_effective_euid != 0 bail is gone.
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
     let _ = write_fixture(&home);
@@ -50,9 +51,9 @@ fn rotate_password_without_root_exits_bad_input() {
         .write_stdin("new-pw\n")
         .output()
         .expect("run");
-    assert_eq!(output.status.code(), Some(4));
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("requires root"), "stderr: {stderr}");
+    assert!(!stderr.contains("requires root"), "elevation error leaked: {stderr}");
 }
 
 #[test]

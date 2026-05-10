@@ -36,7 +36,8 @@ fn write_fixture(home: &TempDir) -> std::path::PathBuf {
 }
 
 #[test]
-fn remove_account_without_root_exits_bad_input() {
+fn remove_account_writes_without_explicit_root_check() {
+    // v0.3.1: the explicit cli_effective_euid != 0 bail is gone.
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
     let _ = write_fixture(&home);
@@ -48,9 +49,9 @@ fn remove_account_without_root_exits_bad_input() {
         .args(["remove-account", "primary", "--yes"])
         .output()
         .expect("run");
-    assert_eq!(output.status.code(), Some(4));
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("requires root"), "stderr: {stderr}");
+    assert!(!stderr.contains("requires root"), "elevation error leaked: {stderr}");
 }
 
 #[test]
