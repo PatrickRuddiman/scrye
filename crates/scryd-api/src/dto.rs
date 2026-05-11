@@ -10,7 +10,6 @@ pub struct SearchQueryDto {
     pub since: Option<String>,
     pub until: Option<String>,
     pub folder: Option<String>,
-    pub account: Option<String>,
     /// Comma-delimited account ids the caller wants the result set
     /// scoped to. Empty / unset = no filter (all accounts).
     pub account_ids: Option<String>,

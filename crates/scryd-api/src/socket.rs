@@ -14,9 +14,9 @@ use crate::ApiError;
 /// should already include the `/scryd` suffix (per
 /// `scryd_runtime::xdg::runtime_dir`).
 ///
-/// `socket_mode` is the kernel-level access gate. The v0.3.1 default
-/// is `0o666` (anyone on the host); v0.2.0's `0o660` is recoverable
-/// via `[server] socket_mode = 0o660` in config.
+/// `socket_mode` is the kernel-level access gate. The default is
+/// `0o666` (anyone on the host); override via `[server] socket_mode`
+/// in config for kernel-level gating.
 pub async fn bind(scryd_runtime_dir: &Path, socket_mode: u32) -> Result<UnixListener, ApiError> {
     if !scryd_runtime_dir.exists() {
         std::fs::create_dir_all(scryd_runtime_dir).map_err(ApiError::Bind)?;

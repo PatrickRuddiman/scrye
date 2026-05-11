@@ -74,7 +74,6 @@ fn flag_path_writes_config_and_dispatches_reconcile() {
 
         let output = tokio::task::spawn_blocking(move || {
             scryd()
-                .env("SCRYD_CLI_FAKE_EUID", "0")
                 .env("XDG_RUNTIME_DIR", &runtime_path)
                 .env("HOME", &home_path)
                 .env_remove("XDG_CONFIG_HOME")
@@ -142,7 +141,6 @@ folders = ["INBOX"]
 
     // Re-run add-account for the same id with a new password.
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env("HOME", home.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -181,7 +179,6 @@ fn missing_required_flag_in_non_interactive_path_exits_bad_input() {
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -211,7 +208,6 @@ fn invalid_account_id_regex_rejected_with_bad_input() {
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -235,7 +231,6 @@ fn invalid_account_id_regex_rejected_with_bad_input() {
 
 #[test]
 fn add_account_writes_config_without_explicit_root_check() {
-    // v0.3.1: the explicit cli_effective_euid != 0 bail is gone.
     // A non-root invocation that has write access to the resolved
     // config path (here: a tempdir under HOME) succeeds; chown to
     // scryd is best-effort and silently no-ops when not running as
@@ -243,7 +238,6 @@ fn add_account_writes_config_without_explicit_root_check() {
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "1000")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -284,7 +278,6 @@ fn add_account_with_root_writes_config_and_prints_restart_hint() {
 
         let output = tokio::task::spawn_blocking(move || {
             scryd()
-                .env("SCRYD_CLI_FAKE_EUID", "0")
                 .env("XDG_RUNTIME_DIR", &runtime_path)
                 .env("HOME", &home_path)
                 .env_remove("XDG_CONFIG_HOME")
@@ -318,7 +311,6 @@ fn add_account_with_root_and_no_daemon_prints_start_hint() {
     let home = TempDir::new().unwrap();
 
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env("HOME", home.path())
         .env_remove("XDG_CONFIG_HOME")

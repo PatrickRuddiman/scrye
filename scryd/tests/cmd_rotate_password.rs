@@ -38,12 +38,10 @@ fn write_fixture(home: &TempDir) -> std::path::PathBuf {
 
 #[test]
 fn rotate_password_writes_without_explicit_root_check() {
-    // v0.3.1: the explicit cli_effective_euid != 0 bail is gone.
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
     let _ = write_fixture(&home);
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "1000")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -62,7 +60,6 @@ fn rotate_password_for_unknown_account_exits_bad_input() {
     let runtime = TempDir::new().unwrap();
     let _ = write_fixture(&home);
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -81,7 +78,6 @@ fn rotate_password_for_existing_account_updates_field_and_preserves_rest() {
     let runtime = TempDir::new().unwrap();
     let path = write_fixture(&home);
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")

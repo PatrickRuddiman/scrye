@@ -21,8 +21,8 @@ async fn bind_honours_caller_supplied_mode() {
 
 #[tokio::test]
 async fn bind_creates_socket_at_mode_0660_when_requested() {
-    // Recoverable v0.2.0 posture: caller passes 0o660 via [server]
-    // socket_mode and gets the group-restricted shape back.
+    // Caller passes 0o660 via [server] socket_mode and gets the
+    // group-restricted shape back.
     let dir = TempDir::new().unwrap();
     let scryd_dir = dir.path().join("scryd");
 

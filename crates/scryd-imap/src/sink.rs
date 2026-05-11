@@ -53,26 +53,18 @@ pub trait MessageSink: Send + Sync {
     /// Return the locally-stored UID set for `(account_id, folder,
     /// uidvalidity)`. The supervisor uses this to drive the periodic
     /// tombstone-scan diff against the server's `UID SEARCH ALL`.
-    /// Default impl returns an empty Vec so existing test stubs that
-    /// don't override compile cleanly.
     async fn list_local_uids(
         &self,
-        _account_id: &str,
-        _folder: &str,
-        _uidvalidity: u32,
-    ) -> Result<Vec<u32>, ClientError> {
-        Ok(Vec::new())
-    }
+        account_id: &str,
+        folder: &str,
+        uidvalidity: u32,
+    ) -> Result<Vec<u32>, ClientError>;
     /// Return the stored uidvalidity for `(account_id, folder)`. The
     /// supervisor uses this to detect mid-session UIDVALIDITY change
-    /// and re-route through `uidvalidity::handle_change`. Default
-    /// impl returns None (no stored state) so the supervisor treats
-    /// any first-seen value as a fresh open.
+    /// and re-route through `uidvalidity::handle_change`.
     async fn stored_uidvalidity(
         &self,
-        _account_id: &str,
-        _folder: &str,
-    ) -> Result<Option<u32>, ClientError> {
-        Ok(None)
-    }
+        account_id: &str,
+        folder: &str,
+    ) -> Result<Option<u32>, ClientError>;
 }

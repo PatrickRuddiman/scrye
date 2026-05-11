@@ -37,12 +37,10 @@ fn write_fixture(home: &TempDir) -> std::path::PathBuf {
 
 #[test]
 fn remove_account_writes_without_explicit_root_check() {
-    // v0.3.1: the explicit cli_effective_euid != 0 bail is gone.
     let home = TempDir::new().unwrap();
     let runtime = TempDir::new().unwrap();
     let _ = write_fixture(&home);
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "1000")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -60,7 +58,6 @@ fn remove_account_for_unknown_account_exits_bad_input() {
     let runtime = TempDir::new().unwrap();
     let _ = write_fixture(&home);
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -78,7 +75,6 @@ fn remove_account_with_yes_flag_skips_prompt_and_removes() {
     let runtime = TempDir::new().unwrap();
     let path = write_fixture(&home);
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")
@@ -102,7 +98,6 @@ fn remove_account_without_yes_flag_aborts_on_blank_input() {
     let original = std::fs::read_to_string(&path).unwrap();
 
     let output = scryd()
-        .env("SCRYD_CLI_FAKE_EUID", "0")
         .env("HOME", home.path())
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env_remove("XDG_CONFIG_HOME")

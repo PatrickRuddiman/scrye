@@ -67,4 +67,17 @@ impl MessageSink for CollectingSink {
             .map(|m| m.server_uid)
             .collect())
     }
+
+    async fn stored_uidvalidity(
+        &self,
+        account_id: &str,
+        folder: &str,
+    ) -> Result<Option<u32>, ClientError> {
+        let updates = self.state_updates.lock().unwrap();
+        Ok(updates
+            .iter()
+            .rev()
+            .find(|(a, f, _)| a == account_id && f == folder)
+            .and_then(|(_, _, u)| u.uidvalidity))
+    }
 }

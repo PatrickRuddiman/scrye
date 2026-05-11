@@ -1,11 +1,6 @@
-//! axum router and Unix-domain-socket transport. The peercred guard
-//! ensures only processes running as the daemon's owning uid can reach
-//! the API; everything else is blocked at accept time.
-//!
-//! Tasks 18–19 add the public read endpoints (`/search`, `/message/:id`,
-//! `/thread/:id`, `/accounts`, `/message/:id/raw`) and the write endpoints
-//! (`/sync`, `/internal/reindex`, `/internal/reconcile`) on top of this
-//! crate's scaffolding.
+//! axum router and Unix-domain-socket transport. The socket is open
+//! by default (v0.3.1 service shape); set `[server] require_peer_uid =
+//! true` to gate accept on the daemon's own uid (peercred backstop).
 
 pub mod dto;
 pub mod handlers;
@@ -25,15 +20,13 @@ pub enum ApiError {
     AlreadyRunning { path: std::path::PathBuf },
     #[error("connecting peer uid {peer_uid} is not the daemon's owning uid")]
     NonOwner { peer_uid: u32 },
-    #[error("SCRYD_ALLOWED_UID must be a non-negative integer; got `{raw}`")]
-    AllowedUidParse { raw: String },
     #[error("peer credentials unavailable: {0}")]
     PeerCred(#[source] std::io::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
 
-pub use peercred::{check_peer_uid, expected_peer_uid, extract_peer_uid, init as init_peercred};
+pub use peercred::{check_peer_uid, extract_peer_uid};
 pub use router::router;
 pub use serve::serve;
 pub use socket::bind;

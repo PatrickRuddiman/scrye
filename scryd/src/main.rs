@@ -96,8 +96,6 @@ struct SearchArgs {
     until: Option<String>,
     #[arg(long)]
     folder: Option<String>,
-    #[arg(long)]
-    account: Option<String>,
     /// Multi-value account scope. `--accounts foo,bar` returns hits
     /// only from those accounts. Empty / absent = all accounts. The
     /// consumer's higher-layer api drives this from per-end-user
@@ -333,10 +331,6 @@ fn build_search_url(args: &SearchArgs) -> String {
         url.push_str("&folder=");
         url.push_str(&urlencoding::encode(v));
     }
-    if let Some(v) = &args.account {
-        url.push_str("&account=");
-        url.push_str(&urlencoding::encode(v));
-    }
     if let Some(ids) = &args.accounts {
         let joined = ids.join(",");
         if !joined.is_empty() {
@@ -504,25 +498,12 @@ fn run_remove_account(args: RemoveAccountArgs) {
     print_restart_hint();
 }
 
-/// Effective uid for the elevation check. Honors `SCRYD_CLI_FAKE_EUID`
-/// when set so integration tests can exercise the elevation gate
-/// without actually running as root. The env var is test-only and
-/// should never be set in production.
-fn cli_effective_euid() -> u32 {
-    if let Ok(s) = std::env::var("SCRYD_CLI_FAKE_EUID") {
-        if let Ok(v) = s.parse::<u32>() {
-            return v;
-        }
-    }
-    nix::unistd::geteuid().as_raw()
-}
-
 /// Chown the freshly-written config to `scryd:scryd` so the daemon
 /// (running under that uid) can read it. Best-effort: silently
 /// no-ops when the `scryd` system user does not exist (test envs)
 /// or when the caller's euid is not root (chown would fail anyway).
 fn chown_to_scryd(path: &std::path::Path) {
-    if cli_effective_euid() != 0 {
+    if nix::unistd::geteuid().as_raw() != 0 {
         return;
     }
     if let Ok(Some(user)) = nix::unistd::User::from_name("scryd") {

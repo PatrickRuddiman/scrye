@@ -1,6 +1,6 @@
 //! Drive axum over a Unix-domain-socket listener with cooperative
-//! shutdown. The peercred check runs at accept time so any non-owner
-//! connection is dropped before axum sees it.
+//! shutdown. Optional peercred backstop runs at accept time when
+//! `require_peer_uid` is on.
 
 use std::future::Future;
 
@@ -9,7 +9,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use tokio::net::UnixListener;
 
-use crate::peercred::{check_stream_peer, init as init_peercred};
+use crate::peercred::check_stream_peer;
 use crate::ApiError;
 
 /// Accept connections on `listener`, optionally peercred-check each
@@ -21,18 +21,13 @@ use crate::ApiError;
 /// v0.3.1 default is `false` (open service shape — anyone who can
 /// reach the socket can call the api; the consumer's higher-layer
 /// api is the auth boundary). Set `true` (via `[server]
-/// require_peer_uid = true` in config) to recover the v0.2.0
-/// single-operator-host posture.
+/// require_peer_uid = true` in config) for same-uid-only enforcement.
 pub async fn serve(
     listener: UnixListener,
     router: Router,
     require_peer_uid: bool,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ApiError> {
-    if require_peer_uid {
-        init_peercred()?;
-    }
-
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
 
     let shutdown_signal = async move {
@@ -101,12 +96,3 @@ pub async fn graceful_shutdown_signal() {
     }
 }
 
-/// `axum::serve(...).with_graceful_shutdown(...)` semantics — kept here
-/// as a marker that the spec requires graceful shutdown coordination.
-/// Tasks 18–19 will replace this stub with the full axum integration
-/// once routes are mounted.
-#[doc(hidden)]
-pub fn with_graceful_shutdown_marker() {
-    // This phrase is what the task 17 AC greps for in this file.
-    let _ = "with_graceful_shutdown";
-}

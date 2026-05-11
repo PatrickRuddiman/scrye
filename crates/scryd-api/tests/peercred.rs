@@ -1,14 +1,14 @@
 #![cfg(unix)]
 //! Peercred unit tests. As of v0.3.1, peercred enforcement is OPT-IN
 //! via `[server] require_peer_uid = true`; the daemon defaults to an
-//! open socket. These tests still exercise the enforcement path because
-//! that path stays the implementation when the operator turns it on.
+//! open socket. These tests still exercise the enforcement primitives
+//! (`check_peer_uid` + `extract_peer_uid`) because they stay the
+//! implementation when the operator turns it on.
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use scryd_api::{bind, check_peer_uid, expected_peer_uid, extract_peer_uid, ApiError};
-use serial_test::serial;
+use scryd_api::{bind, check_peer_uid, extract_peer_uid, ApiError};
 use tempfile::TempDir;
 use tokio::net::UnixStream;
 use tracing_subscriber::fmt::MakeWriter;
@@ -74,46 +74,6 @@ fn check_peer_uid_rejects_mismatched_uid_with_log() {
     assert!(line.contains("\"level\":\"ERROR\""));
 }
 
-const ENV_ALLOWED_UID: &str = "SCRYD_ALLOWED_UID";
-
-#[test]
-#[serial]
-fn env_unset_falls_back_to_getuid() {
-    std::env::remove_var(ENV_ALLOWED_UID);
-    let resolved = expected_peer_uid().unwrap();
-    assert_eq!(resolved, nix::unistd::getuid().as_raw());
-}
-
-#[test]
-#[serial]
-fn env_set_to_valid_uid_returns_parsed_value() {
-    std::env::set_var(ENV_ALLOWED_UID, "424242");
-    let resolved = expected_peer_uid().unwrap();
-    std::env::remove_var(ENV_ALLOWED_UID);
-    assert_eq!(resolved, 424242u32);
-}
-
-#[test]
-#[serial]
-fn env_set_to_empty_string_falls_back() {
-    std::env::set_var(ENV_ALLOWED_UID, "");
-    let resolved = expected_peer_uid().unwrap();
-    std::env::remove_var(ENV_ALLOWED_UID);
-    assert_eq!(resolved, nix::unistd::getuid().as_raw());
-}
-
-#[test]
-#[serial]
-fn env_set_to_garbage_returns_parse_error() {
-    std::env::set_var(ENV_ALLOWED_UID, "not-a-uid");
-    let result = expected_peer_uid();
-    std::env::remove_var(ENV_ALLOWED_UID);
-    match result {
-        Err(ApiError::AllowedUidParse { raw }) => assert_eq!(raw, "not-a-uid"),
-        other => panic!("expected AllowedUidParse, got {other:?}"),
-    }
-}
-
 #[tokio::test]
 async fn extract_peer_uid_returns_current_process_uid_for_self_connection() {
     let dir = TempDir::new().unwrap();
@@ -125,7 +85,6 @@ async fn extract_peer_uid_returns_current_process_uid_for_self_connection() {
     let (server_side, _addr) = listener.accept().await.unwrap();
     let _client_side = connect.await.unwrap();
 
-    // The other end of the connection (us) is running as our own uid.
     let peer_uid = extract_peer_uid(&server_side).unwrap();
     assert_eq!(peer_uid, nix::unistd::getuid().as_raw());
 }

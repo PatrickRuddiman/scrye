@@ -62,10 +62,8 @@ pub async fn handle_search(
     let limit = q.limit.unwrap_or(LIMIT_DEFAULT).clamp(1, LIMIT_MAX);
     let k = std::cmp::max(limit * K_MULTIPLIER, K_MIN);
 
-    // Caller-driven account scope. `account_ids` (multi) takes
-    // precedence; the legacy single-value `account` is folded in if
-    // present and not already covered.
-    let mut account_ids: Vec<String> = q
+    // Caller-driven account scope. Empty = all accounts.
+    let account_ids: Vec<String> = q
         .account_ids
         .as_deref()
         .map(|s| {
@@ -76,11 +74,6 @@ pub async fn handle_search(
                 .collect()
         })
         .unwrap_or_default();
-    if let Some(legacy) = q.account.as_deref() {
-        if !legacy.is_empty() && !account_ids.iter().any(|id| id == legacy) {
-            account_ids.push(legacy.to_string());
-        }
-    }
 
     let search_resp = match state
         .searcher

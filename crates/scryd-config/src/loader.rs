@@ -24,17 +24,15 @@ pub struct Config {
 pub struct ServerCfg {
     /// Whether to enforce the SO_PEERCRED uid match at accept time.
     /// Defaults to `false` (open) — the consumer's higher-layer API
-    /// is the auth boundary. Set to `true` to fall back to the
-    /// v0.2.0 single-operator-host model that rejects any peer uid
-    /// other than the daemon's expected one.
+    /// is the auth boundary. Set to `true` to accept only the
+    /// daemon's own uid (same-uid enforcement).
     #[serde(default = "default_require_peer_uid")]
     pub require_peer_uid: bool,
     /// File mode applied to `/run/scryd/scryd.sock` after bind. The
     /// kernel rejects connections whose euid + group don't satisfy
     /// the mode bits, so this is the coarse network-access gate.
-    /// Defaults to `0o666` (anyone on the host) — the v0.3.1 service
-    /// model. Override to `0o660` + manage the directory's group to
-    /// recover a v0.2.0-style "operator-only" bind.
+    /// Defaults to `0o666` (anyone on the host). Override to `0o660`
+    /// + manage the directory's group for kernel-level gating.
     #[serde(default = "default_socket_mode")]
     pub socket_mode: u32,
 }

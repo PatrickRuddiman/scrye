@@ -28,10 +28,8 @@ pub fn run() -> Result<PreflightOk, RuntimeError> {
     let assets = xdg::assets_dir()?;
 
     // The runtime dir's parent ($XDG_RUNTIME_DIR) is what we audit; the
-    // socket subdir is created at bind time. v0.1.0 had the parent
-    // owned by the operator at mode 0700; v0.2.0 has it owned by the
-    // scryd system uid at mode 0750 (the operator gets group access).
-    // Either layout is acceptable; we just assert the directory exists.
+    // socket subdir is created at bind time. We just assert it exists;
+    // mode/owner is the operator's choice (v0.3.1 ships 0755 scryd:scryd).
     let runtime_parent = runtime
         .parent()
         .ok_or_else(|| RuntimeError::UnresolvableXdgPath("runtime_dir parent"))?;

@@ -10,7 +10,7 @@ const ASSETS_SUBDIR: &str = "assets";
 const META_FILENAME: &str = "config.toml";
 
 /// `$XDG_RUNTIME_DIR/scryd`, OR `$XDG_RUNTIME_DIR` itself if it
-/// already ends in `/scryd` (v0.2.0 systemd unit sets it directly to
+/// already ends in `/scryd` (the systemd unit sets it directly to
 /// `/run/scryd`). The env var is mandatory — without it, scryd has
 /// no per-user-and-volatile directory to put the API socket in.
 pub fn runtime_dir() -> Result<PathBuf, RuntimeError> {
@@ -28,7 +28,7 @@ pub fn runtime_dir() -> Result<PathBuf, RuntimeError> {
 }
 
 /// `$XDG_CONFIG_HOME/scryd/config.toml`, falling back to
-/// `$HOME/.config/scryd/config.toml`. v0.2.0 systemd unit sets
+/// `$HOME/.config/scryd/config.toml`. The systemd unit sets
 /// `XDG_CONFIG_HOME=/etc/scryd` directly; we detect that and skip
 /// the redundant `/scryd` suffix.
 pub fn config_path() -> Result<PathBuf, RuntimeError> {
@@ -47,7 +47,7 @@ pub fn config_path() -> Result<PathBuf, RuntimeError> {
 }
 
 /// `$XDG_DATA_HOME/scryd`, falling back to `$HOME/.local/share/scryd`.
-/// v0.2.0 systemd unit sets `XDG_DATA_HOME=/var/lib/scryd` directly;
+/// The systemd unit sets `XDG_DATA_HOME=/var/lib/scryd` directly;
 /// we detect that and skip the redundant `/scryd` suffix.
 pub fn data_dir() -> Result<PathBuf, RuntimeError> {
     if let Some(base) = read_env("XDG_DATA_HOME") {

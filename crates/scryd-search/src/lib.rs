@@ -21,7 +21,15 @@ pub mod indexer;
 pub mod searcher;
 pub mod snippet;
 
-#[cfg(feature = "witchcraft-backend")]
+// The witchcraft binding only resolves on Linux + macOS targets
+// (per the target-conditional deps in Cargo.toml). On other hosts
+// (Windows dev boxes) the feature flag is still on but the deps
+// are absent — gate the module on the same target predicate so the
+// workspace builds cleanly everywhere.
+#[cfg(all(
+    feature = "witchcraft-backend",
+    any(target_os = "linux", target_os = "macos")
+))]
 pub mod witchcraft_handle;
 
 use serde::{Deserialize, Serialize};
@@ -145,5 +153,8 @@ pub use indexer::Indexer;
 pub use searcher::{Searcher, K_MIN, K_MULTIPLIER};
 pub use snippet::render as render_snippet;
 
-#[cfg(feature = "witchcraft-backend")]
+#[cfg(all(
+    feature = "witchcraft-backend",
+    any(target_os = "linux", target_os = "macos")
+))]
 pub use witchcraft_handle::WitchcraftIndexer;

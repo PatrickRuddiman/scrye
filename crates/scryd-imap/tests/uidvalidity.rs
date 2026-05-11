@@ -33,6 +33,21 @@ impl MessageSink for StubSink {
             .push((account_id.to_string(), folder.to_string(), update));
         Ok(())
     }
+    async fn list_local_uids(
+        &self,
+        _account_id: &str,
+        _folder: &str,
+        _uidvalidity: u32,
+    ) -> Result<Vec<u32>, ClientError> {
+        Ok(Vec::new())
+    }
+    async fn stored_uidvalidity(
+        &self,
+        _account_id: &str,
+        _folder: &str,
+    ) -> Result<Option<u32>, ClientError> {
+        Ok(None)
+    }
 }
 
 #[tokio::test]
