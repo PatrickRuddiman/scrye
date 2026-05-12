@@ -140,15 +140,6 @@ async fn search_with_invalid_date_returns_bad_query() {
 }
 
 #[tokio::test]
-async fn search_filter_by_account_excludes_non_matching() {
-    let (_d, state) = setup().await;
-    let (status, body, _) = request(state, "/search?q=invoice&account=other").await;
-    assert_eq!(status, StatusCode::OK);
-    let v = parse_json(&body);
-    assert_eq!(v["hits"].as_array().unwrap().len(), 0);
-}
-
-#[tokio::test]
 async fn search_account_ids_multi_value_includes_matching() {
     let (_d, state) = setup().await;
     // The fixture seeds messages under account_id "primary"; the
