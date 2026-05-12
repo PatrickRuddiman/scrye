@@ -12,6 +12,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use tokio::net::TcpStream;
@@ -71,9 +72,8 @@ fn client_config_from_pem(ca_pem_path: &Path) -> Result<ClientConfig, ClientErro
     let pem_bytes = std::fs::read(ca_pem_path).map_err(|e| {
         ClientError::TlsHandshake(format!("read CA PEM at {}: {e}", ca_pem_path.display()))
     })?;
-    let mut reader = std::io::BufReader::new(&pem_bytes[..]);
     let mut roots = RootCertStore::empty();
-    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&pem_bytes)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             ClientError::TlsHandshake(format!(
