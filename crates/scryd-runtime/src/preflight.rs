@@ -35,8 +35,11 @@ pub fn run() -> Result<PreflightOk, RuntimeError> {
         .ok_or_else(|| RuntimeError::UnresolvableXdgPath("runtime_dir parent"))?;
     assert_dir_exists(runtime_parent, "runtime dir parent")?;
 
-    // Config file: must exist, mode 0600.
-    assert_file_mode(&config, 0o600, "config")?;
+    // Config file: must exist and not be world-readable. v0.3.1 ships
+    // `scryd:scryd 0640` so members of group `scryd` can read it, the
+    // daemon itself owns it, and everyone else (including the operator
+    // when not in the group) is excluded.
+    assert_file_no_world_bits(&config, "config")?;
 
     // Data dir: create if missing, then assert mode 0700.
     if !data.exists() {
@@ -133,7 +136,7 @@ fn assert_dir(path: &Path, _mode: u32, label: &str) -> Result<(), RuntimeError> 
 }
 
 #[cfg(unix)]
-fn assert_file_mode(path: &Path, expected_mode: u32, label: &str) -> Result<(), RuntimeError> {
+fn assert_file_no_world_bits(path: &Path, label: &str) -> Result<(), RuntimeError> {
     use std::os::unix::fs::MetadataExt;
     let meta = std::fs::metadata(path).map_err(|e| {
         log_failure!(
@@ -145,10 +148,8 @@ fn assert_file_mode(path: &Path, expected_mode: u32, label: &str) -> Result<(), 
         RuntimeError::Io(e)
     })?;
     let mode = meta.mode() & 0o777;
-    if mode != expected_mode {
-        let reason = format!(
-            "{label}: expected mode {expected_mode:o}, got {mode:o}"
-        );
+    if mode & 0o007 != 0 {
+        let reason = format!("{label}: world bits set on mode {mode:o}");
         log_failure!(
             category = category::CONFIG_PERMISSION_ERROR,
             path = %path.display(),
@@ -164,7 +165,7 @@ fn assert_file_mode(path: &Path, expected_mode: u32, label: &str) -> Result<(), 
 }
 
 #[cfg(not(unix))]
-fn assert_file_mode(path: &Path, _mode: u32, label: &str) -> Result<(), RuntimeError> {
+fn assert_file_no_world_bits(path: &Path, label: &str) -> Result<(), RuntimeError> {
     if !path.exists() {
         return Err(RuntimeError::PermissionInvariant {
             path: path.to_path_buf(),

@@ -83,11 +83,22 @@ fn preflight_rejects_world_readable_config() {
     let _g = setup_layout(0o700, 0o644, None);
     match run_preflight() {
         Err(RuntimeError::PermissionInvariant { reason, path }) => {
-            assert!(reason.contains("config"));
+            assert!(reason.contains("config"), "reason={reason}");
+            assert!(reason.contains("world"), "reason={reason}");
             assert!(path.ends_with("config.toml"));
         }
         other => panic!("expected PermissionInvariant, got {other:?}"),
     }
+    cleanup_env();
+}
+
+#[test]
+#[serial]
+fn preflight_accepts_group_readable_config() {
+    // v0.3.1 installs config as scryd:scryd 0640 so members of group
+    // scryd can read it; preflight must accept that.
+    let _g = setup_layout(0o700, 0o640, None);
+    run_preflight().expect("0o640 config should pass preflight");
     cleanup_env();
 }
 
