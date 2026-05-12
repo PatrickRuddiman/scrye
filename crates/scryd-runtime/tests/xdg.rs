@@ -1,9 +1,9 @@
 use scryd_runtime::xdg;
 use scryd_runtime::RuntimeError;
+use serial_test::serial;
 
-// Each test mutates process-global env vars. Tests are NOT thread-safe
-// against parallel mutation; if they ever flake, mark `#[serial_test]`.
-// For now scryd-runtime's test set is small and serial-by-convention.
+// Each test mutates process-global env vars. `#[serial]` keeps them on a
+// shared lock with the preflight tests, which touch the same vars.
 
 fn clear_xdg_env() {
     for key in [
@@ -17,6 +17,7 @@ fn clear_xdg_env() {
 }
 
 #[test]
+#[serial]
 fn runtime_dir_requires_xdg_runtime_dir() {
     clear_xdg_env();
     match xdg::runtime_dir() {
@@ -26,6 +27,7 @@ fn runtime_dir_requires_xdg_runtime_dir() {
 }
 
 #[test]
+#[serial]
 fn runtime_dir_appends_scryd() {
     clear_xdg_env();
     std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1001");
@@ -34,6 +36,7 @@ fn runtime_dir_appends_scryd() {
 }
 
 #[test]
+#[serial]
 fn config_path_uses_xdg_config_home_when_set() {
     clear_xdg_env();
     std::env::set_var("XDG_CONFIG_HOME", "/home/alice/cfg");
@@ -45,6 +48,7 @@ fn config_path_uses_xdg_config_home_when_set() {
 }
 
 #[test]
+#[serial]
 fn config_path_falls_back_to_home_dot_config() {
     clear_xdg_env();
     std::env::set_var("HOME", "/home/alice");
@@ -56,6 +60,7 @@ fn config_path_falls_back_to_home_dot_config() {
 }
 
 #[test]
+#[serial]
 fn data_dir_uses_xdg_data_home_when_set() {
     clear_xdg_env();
     std::env::set_var("XDG_DATA_HOME", "/home/alice/data");
@@ -64,6 +69,7 @@ fn data_dir_uses_xdg_data_home_when_set() {
 }
 
 #[test]
+#[serial]
 fn data_dir_falls_back_to_home_dot_local_share() {
     clear_xdg_env();
     std::env::set_var("HOME", "/home/alice");
@@ -75,6 +81,7 @@ fn data_dir_falls_back_to_home_dot_local_share() {
 }
 
 #[test]
+#[serial]
 fn assets_dir_is_data_dir_plus_assets() {
     clear_xdg_env();
     std::env::set_var("XDG_DATA_HOME", "/home/alice/data");
@@ -86,6 +93,7 @@ fn assets_dir_is_data_dir_plus_assets() {
 }
 
 #[test]
+#[serial]
 fn empty_string_env_treated_as_unset() {
     clear_xdg_env();
     std::env::set_var("XDG_RUNTIME_DIR", "");

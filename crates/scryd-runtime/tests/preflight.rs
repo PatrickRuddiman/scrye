@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use scryd_runtime::{run_preflight, RuntimeError};
+use serial_test::serial;
 use tempfile::TempDir;
 
 fn setup_layout(
@@ -52,6 +53,7 @@ fn cleanup_env() {
 }
 
 #[test]
+#[serial]
 fn preflight_passes_when_invariants_hold() {
     let _g = (
         setup_layout(0o700, 0o600, None),
@@ -65,6 +67,7 @@ fn preflight_passes_when_invariants_hold() {
 }
 
 #[test]
+#[serial]
 fn preflight_creates_data_dir_when_missing() {
     let _g = setup_layout(0o700, 0o600, None);
     let ok = run_preflight().unwrap();
@@ -75,6 +78,7 @@ fn preflight_creates_data_dir_when_missing() {
 }
 
 #[test]
+#[serial]
 fn preflight_rejects_world_readable_config() {
     let _g = setup_layout(0o700, 0o644, None);
     match run_preflight() {
@@ -88,6 +92,7 @@ fn preflight_rejects_world_readable_config() {
 }
 
 #[test]
+#[serial]
 fn preflight_accepts_loose_runtime_dir() {
     // Preflight asserts the runtime dir is a directory but no longer
     // asserts an exact mode; the install-time tmpfiles drop-in is the
@@ -101,6 +106,7 @@ fn preflight_accepts_loose_runtime_dir() {
 }
 
 #[test]
+#[serial]
 fn preflight_rejects_loose_data_dir() {
     let _g = setup_layout(0o700, 0o600, Some(0o755));
     match run_preflight() {
@@ -113,6 +119,7 @@ fn preflight_rejects_loose_data_dir() {
 }
 
 #[test]
+#[serial]
 fn preflight_fails_without_xdg_runtime_dir() {
     cleanup_env();
     let runtime_root = TempDir::new().unwrap();

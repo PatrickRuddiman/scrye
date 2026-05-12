@@ -28,3 +28,4 @@ tokio-util = { version = "0.7", features = ["rt"] }
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+serial_test = "3"
