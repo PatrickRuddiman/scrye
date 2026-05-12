@@ -62,9 +62,13 @@ jobs:
           set -euo pipefail
           # systemd-analyze verify rejects the unit if ExecStart points
           # at a missing binary; stage a no-op executable at the real
-          # path to satisfy the check on a fresh runner.
+          # path to satisfy the check on a fresh runner. It also
+          # rejects filenames without a unit-type extension, so the
+          # template gets copied to /tmp/scryd.service first.
           sudo install -m 0755 /bin/true /usr/local/bin/scryd
-          systemd-analyze verify ops/scryd.service.in
+          rendered="$(mktemp -d)/scryd.service"
+          cp ops/scryd.service.in "$rendered"
+          systemd-analyze verify "$rendered"
           sudo rm /usr/local/bin/scryd
         shell: bash
 
