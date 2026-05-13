@@ -79,7 +79,6 @@ fn downloads_writes_at_mode_0600_with_correct_hash() {
 
         let output = tokio::task::spawn_blocking(move || {
             helper()
-                .env("SCRYD_FETCH_WEIGHTS_ALLOW_ROOT", "1")
                 .args([
                     "--target",
                     target.to_str().unwrap(),
@@ -123,7 +122,6 @@ fn second_invocation_with_correct_hash_is_a_noop() {
         let sha_for_first = sha.clone();
         let _ = tokio::task::spawn_blocking(move || {
             helper()
-                .env("SCRYD_FETCH_WEIGHTS_ALLOW_ROOT", "1")
                 .args([
                     "--target",
                     target_for_first.to_str().unwrap(),
@@ -147,7 +145,6 @@ fn second_invocation_with_correct_hash_is_a_noop() {
         // Second call with the same hash: must NOT re-write the file.
         let output = tokio::task::spawn_blocking(move || {
             helper()
-                .env("SCRYD_FETCH_WEIGHTS_ALLOW_ROOT", "1")
                 .args([
                     "--target",
                     target.to_str().unwrap(),
@@ -190,7 +187,6 @@ fn corrupt_existing_file_is_redownloaded() {
 
         let output = tokio::task::spawn_blocking(move || {
             helper()
-                .env("SCRYD_FETCH_WEIGHTS_ALLOW_ROOT", "1")
                 .args([
                     "--target",
                     target.to_str().unwrap(),
@@ -226,7 +222,6 @@ fn hash_mismatch_after_download_fails_loudly() {
 
         let output = tokio::task::spawn_blocking(move || {
             helper()
-                .env("SCRYD_FETCH_WEIGHTS_ALLOW_ROOT", "1")
                 .args([
                     "--target",
                     target.to_str().unwrap(),

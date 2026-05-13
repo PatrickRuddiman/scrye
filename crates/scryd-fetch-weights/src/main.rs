@@ -1,8 +1,8 @@
 //! Download the XTR T5 weights bundle to `<target>/xtr-weights.gguf`,
 //! verify SHA-256, and exit. Re-running the helper against an
-//! already-correct file is a no-op. Refuses to run as root — the
-//! per-user install model in build-and-packaging slice §3 Decision 7
-//! prohibits a root-owned weights file.
+//! already-correct file is a no-op. Under v0.3.1's service model the
+//! daemon spawns this helper on first start; uid is inherited from
+//! whichever account systemd runs the unit under (default: scryd).
 
 use std::path::PathBuf;
 
@@ -58,7 +58,6 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    refuse_as_root()?;
 
     let target_dir = match args.target {
         Some(p) => p,
@@ -124,28 +123,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-fn refuse_as_root() -> anyhow::Result<()> {
-    // SAFETY: getuid() is always safe to call.
-    let uid = unsafe { libc_getuid() };
-    if uid == 0 && std::env::var("SCRYD_FETCH_WEIGHTS_ALLOW_ROOT").is_err() {
-        anyhow::bail!(
-            "scryd-fetch-weights must run as a non-root user (set SCRYD_FETCH_WEIGHTS_ALLOW_ROOT only in tests)"
-        );
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn refuse_as_root() -> anyhow::Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-unsafe extern "C" {
-    #[link_name = "getuid"]
-    fn libc_getuid() -> u32;
-}
 
 fn default_target_dir() -> anyhow::Result<PathBuf> {
     if let Ok(s) = std::env::var("XDG_DATA_HOME") {
