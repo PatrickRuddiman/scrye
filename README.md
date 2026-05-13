@@ -61,8 +61,10 @@ ranked snippets with stable IDs you can fetch the full context for.
   glibc 2.34+; older distros need to build from source.
 - Root (the installer creates a system user and writes under `/etc`,
   `/var/lib`, `/usr/local/bin`, and `/etc/systemd/system`).
-- Internet access on first install for `scryd-fetch-weights` to
-  download the T5 weights bundle (~1 GB; SHA-256-verified).
+- Internet access on first start for `scryd-fetch-weights` to
+  download the witchcraft asset bundle (~61 MB; SHA-256-verified
+  against the version baked into the binary). The bundle contains
+  `config.json` + `tokenizer.json` + `xtr.gguf`.
 
 ### Quick install
 
@@ -76,38 +78,71 @@ cd scryd-vX.Y.Z-x86_64-linux
 sudo ./install.sh
 ```
 
-By default the installer resolves the operator from `$SUDO_USER`. To
-install for a different login (e.g. provisioning a service account):
+`install.sh` is non-interactive and idempotent. Useful flags:
 
-```sh
-sudo ./install.sh --user alice
-```
+| Flag | Purpose |
+|---|---|
+| `--skip-weights` | test only: don't run `scryd-fetch-weights`; daemon will fetch on first start |
+| `--skip-systemctl` | test only: don't `systemctl daemon-reload` + `enable --now` |
 
 What `install.sh` lays down:
 
 | Path | Owner | Mode | Purpose |
 |---|---|---|---|
 | `/usr/local/bin/scryd` | root:root | 0755 | CLI + daemon binary |
-| `/usr/local/bin/scryd-fetch-weights` | root:root | 0755 | weights downloader |
-| `/etc/scryd/config.toml` | scryd:scryd | 0600 | IMAP accounts (operator can't read) |
-| `/var/lib/scryd/` | scryd:scryd | 0700 | meta DB + index |
-| `/var/lib/scryd/assets/` | scryd:scryd | 0755 | T5 weights (mmap) |
-| `/run/scryd/` | scryd:&lt;operator&gt; | 0750 | runtime dir; tmpfiles.d |
+| `/usr/local/bin/scryd-fetch-weights` | root:root | 0755 | asset-bundle downloader |
+| `/etc/scryd/config.toml` | scryd:scryd | 0640 | IMAP accounts (group `scryd` can read; world cannot) |
+| `/var/lib/scryd/` | scryd:scryd | 0700 | meta DB + witchcraft index |
+| `/var/lib/scryd/assets/` | scryd:scryd | 0755 | xtr asset bundle |
+| `/run/scryd/` | scryd:scryd | 0755 | runtime dir; tmpfiles.d |
+| `/run/scryd/scryd.sock` | scryd:scryd | 0666 | API socket (open by default; see `[server]` to tighten) |
 | `/etc/systemd/system/scryd.service` | root:root | 0644 | rendered unit |
 | `/etc/tmpfiles.d/scryd.conf` | root:root | 0644 | rendered drop-in |
 
 ### First account
 
+Interactive (operator at a terminal):
+
 ```sh
 sudo scryd add-account
-sudo systemctl restart scryd
 ```
 
-The CLI prompts for IMAP host / port / user / password; the password
-is written into `/etc/scryd/config.toml` (which only the daemon's UID
-can read) and the daemon picks up the new account on the next start.
-If the daemon was not yet running, the CLI prints
-`apply changes: sudo systemctl start scryd` instead.
+The CLI prompts for IMAP host / port / user / password / folders;
+writes them into `/etc/scryd/config.toml` (owned by scryd:scryd 0640)
+and POSTs `/internal/reconcile` to the daemon so the new account is
+picked up without a restart. If the daemon isn't running yet, the
+CLI prints `apply changes: sudo systemctl start scryd` instead.
+
+Non-interactive (provisioning script / agent):
+
+```sh
+printf '%s' "$IMAP_PASSWORD" | sudo scryd add-account \
+    --account-id work \
+    --host imap.example.com \
+    --port 993 \
+    --user alice@example.com \
+    --password-stdin \
+    --folders INBOX,Archive
+```
+
+`--port` defaults to `993`; `--folders` defaults to `INBOX` if
+omitted. `account-id` must match `^[a-z0-9_-]+$`.
+
+The minimal `[[accounts]]` table for hand-editing
+`/etc/scryd/config.toml` directly:
+
+```toml
+[[accounts]]
+id = "work"
+host = "imap.example.com"
+port = 993
+user = "alice@example.com"
+password = "..."
+tls = true
+folders = ["INBOX"]
+# optional: per-account custom CA for self-signed corporate IMAP.
+# tls_ca_path = "/etc/scryd/work-ca.pem"
+```
 
 ### Verify it's working
 
@@ -115,8 +150,7 @@ If the daemon was not yet running, the CLI prints
 # Live tail the daemon log.
 journalctl -u scryd -f
 
-# Run a search (no sudo needed; the operator's UID is allowed
-# on the socket).
+# Run a search (socket is 0666 by default — any local user works).
 scryd search "from:bob"
 
 # Check the index size.
@@ -126,16 +160,50 @@ sudo ls /var/lib/scryd/
 ### Daily commands
 
 ```sh
-# Reads (no sudo)
+# Reads (no sudo).
 scryd search "lunch with bob since:2026-01-01"
 scryd reindex
+scryd sync
+scryd status
 
 # Mutations (sudo because only scryd:scryd can write the config;
-# each prints a restart hint)
+# add-account / rotate / remove POST /internal/reconcile so the
+# daemon picks up the change without a restart).
 sudo scryd add-account
 sudo scryd rotate-password <account-id>
 sudo scryd remove-account <account-id>
-sudo systemctl restart scryd
+```
+
+### Unattended install (agent / provisioning recipe)
+
+A copy-pasteable end-to-end install that needs no human input —
+useful for provisioning scripts and AI-agent install workflows.
+Requires `gh` (or substitute `curl` against the Releases REST API),
+`tar`, `sudo`. Assumes the IMAP account secret is passed via
+`$IMAP_PASSWORD`:
+
+```sh
+set -euo pipefail
+arch="$(uname -m)"   # x86_64 or aarch64
+asset="$(gh release view --repo PatrickRuddiman/scrye --json assets \
+    --jq ".assets[] | select(.name | endswith(\"${arch}-linux.tar.gz\")) | .url" \
+    | head -n1)"
+curl -fsSL -o /tmp/scryd.tar.gz "$asset"
+mkdir -p /tmp/scryd-install && tar -xzf /tmp/scryd.tar.gz -C /tmp/scryd-install --strip-components=1
+sudo /tmp/scryd-install/install.sh
+
+printf '%s' "$IMAP_PASSWORD" | sudo /usr/local/bin/scryd add-account \
+    --account-id work \
+    --host imap.example.com \
+    --user alice@example.com \
+    --password-stdin \
+    --folders INBOX
+
+# First daemon start triggers scryd-fetch-weights -> downloads the
+# ~61 MB witchcraft asset bundle into /var/lib/scryd/assets/. Tail
+# the journal until the daemon logs `serve_loop_running` if you want
+# a hard ready-signal:
+sudo journalctl -u scryd -f
 ```
 
 ### Uninstall
