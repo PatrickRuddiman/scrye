@@ -11,5 +11,5 @@ mod secret;
 
 pub use loader::{Config, ConfigError, IndexersCfg, ServerCfg, SyncCfg};
 pub use loader::AccountCfg;
-pub use permissions::assert_mode_0600;
+pub use permissions::assert_no_world_bits;
 pub use secret::AccountPassword;

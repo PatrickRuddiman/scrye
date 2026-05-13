@@ -227,6 +227,18 @@ fn load_refuses_world_readable_config() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn load_accepts_group_readable_config() {
+    // v0.3.1 installs the config as scryd:scryd 0640; the loader must
+    // accept that and only reject world-readable bits.
+    use std::os::unix::fs::PermissionsExt;
+    let f = write_config(MIN_VALID);
+    std::fs::set_permissions(f.path(), std::fs::Permissions::from_mode(0o640))
+        .expect("chmod 0640");
+    Config::load(f.path()).expect("0o640 config should load");
+}
+
 #[test]
 fn server_table_defaults_when_absent() {
     let f = write_config(MIN_VALID);
