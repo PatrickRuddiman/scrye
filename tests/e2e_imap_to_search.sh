@@ -207,18 +207,28 @@ note "secondary-filter assertion passed"
 note "killing daemon and restarting to prove witchcraft persistence"
 kill -TERM "$SCRYD_PID" 2>/dev/null || true
 wait "$SCRYD_PID" 2>/dev/null || true
+# Remove any socket file the prior daemon may have left behind so the
+# wait loop only succeeds against the new daemon's freshly-bound
+# socket, and not a stale path that lingers across the restart.
+rm -f /run/scryd/scryd.sock
 mv /tmp/scryd.log /tmp/scryd.log.pre-restart || true
 start_daemon
 
-# Wait for socket to come back.
-DEADLINE=$(($(date +%s) + 30))
+# Wait for the new daemon to be ACCEPTING (the socket file can appear
+# well before witchcraft finishes loading the model; verify by
+# probing with a trivial search until it responds).
+DEADLINE=$(($(date +%s) + 90))
+DAEMON_READY=0
 while [[ $(date +%s) -lt $DEADLINE ]]; do
     if [[ -S /run/scryd/scryd.sock ]]; then
-        break
+        if XDG_RUNTIME_DIR=/run/scryd /usr/local/bin/scryd search "ping" --limit 1 --json >/dev/null 2>&1; then
+            DAEMON_READY=1
+            break
+        fi
     fi
-    sleep 0.2
+    sleep 0.5
 done
-[[ -S /run/scryd/scryd.sock ]] || { KEEP_LOG=1; fail "socket did not return after restart"; }
+[[ "$DAEMON_READY" -eq 1 ]] || { KEEP_LOG=1; fail "daemon did not accept searches within 90s after restart"; }
 
 note "search after restart (no re-fetch needed)"
 POST_OUT=$(XDG_RUNTIME_DIR=/run/scryd \
