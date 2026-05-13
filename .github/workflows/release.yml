@@ -127,16 +127,6 @@ jobs:
           cp target/${{ matrix.target }}/release/scryd-fetch-weights target/release/scryd-fetch-weights
         shell: bash
 
-      - name: stage xtr-int4 assets into /var/lib/scryd/assets
-        if: matrix.cross == false
-        run: |
-          set -euo pipefail
-          sudo install -d -o scryd -g scryd -m 0755 /var/lib/scryd/assets
-          for f in tokenizer.json config.json xtr-ov-int4.xml xtr-ov-int4.bin; do
-            sudo install -o scryd -g scryd -m 0644 "assets-cache/$f" "/var/lib/scryd/assets/$f"
-          done
-        shell: bash
-
       - name: e2e imap-to-search smoke
         if: matrix.cross == false
         run: |
