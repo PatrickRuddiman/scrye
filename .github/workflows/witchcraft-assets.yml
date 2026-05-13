@@ -118,20 +118,22 @@ jobs:
           tag="witchcraft-assets-${REV}"
           # If the release already exists, delete its existing assets so
           # the upload-step doesn't choke on a conflict; otherwise create.
+          notes_file="$(mktemp)"
+          cat > "$notes_file" <<EOF
+          OpenVINO INT4-quantized XTR T5 encoder produced from dropbox/witchcraft@${REV} via downloadweights.py + quantize-openvino.py.
+
+          Contents (inside the tarball, under \`xtr-int4-${REV}/\`):
+          - tokenizer.json
+          - config.json
+          - xtr-ov-int4.xml
+          - xtr-ov-int4.bin
+
+          Scryd's daemon expects these four files in \`/var/lib/scryd/assets/\` (the install-script-staged location) before \`scryd serve\` is started.
+          EOF
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$TARBALL" "$SHA_FILE" --clobber
           else
-            gh release create "$tag" \
-              --title "witchcraft xtr-int4 assets @ ${REV}" \
-              --notes "OpenVINO INT4-quantized XTR T5 encoder produced from dropbox/witchcraft@${REV} via downloadweights.py + quantize-openvino.py.
-
-Contents (inside the tarball, under \`xtr-int4-${REV}/\`):
-- tokenizer.json
-- config.json
-- xtr-ov-int4.xml
-- xtr-ov-int4.bin
-
-Scryd's daemon expects these four files in \`/var/lib/scryd/assets/\` (the install-script-staged location) before \`scryd serve\` is started." \
-              "$TARBALL" "$SHA_FILE"
+            gh release create "$tag" --title "witchcraft xtr-int4 assets @ ${REV}" --notes-file "$notes_file" "$TARBALL" "$SHA_FILE"
           fi
+          rm -f "$notes_file"
         shell: bash
