@@ -1,0 +1,137 @@
+name: witchcraft-assets
+
+# Build the XTR INT4 OpenVINO asset bundle that scryd's daemon
+# consumes at runtime. Pinned to a specific dropbox/witchcraft
+# revision; the upstream python pipeline produces the asset set:
+#   tokenizer.json
+#   config.json
+#   xtr-ov-int4.xml
+#   xtr-ov-int4.bin
+# The output is uploaded to a GitHub release tagged
+# `witchcraft-assets-<short-rev>` so scryd's release.yml and the
+# install-time fetcher can curl a fixed URL with a pinned SHA-256.
+#
+# Run manually via `gh workflow run witchcraft-assets.yml`. The
+# job is idempotent: re-running it replaces the existing release
+# assets in place.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  # Same pin scryd-search uses in the workspace Cargo.toml.
+  WITCHCRAFT_REV: 1370cd569c7a882815cc22169f52dc9aa195cda7
+
+jobs:
+  build:
+    name: build xtr-int4 asset bundle
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: short rev
+        id: rev
+        run: |
+          set -euo pipefail
+          echo "short=${WITCHCRAFT_REV:0:7}" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: clone witchcraft @ pinned rev
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/dropbox/witchcraft witchcraft-src
+          (cd witchcraft-src && git checkout "$WITCHCRAFT_REV")
+        shell: bash
+
+      - name: install python deps
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # Pin openvino to the exact upstream version; torch / transformers
+          # / huggingface_hub / safetensors / nncf are upstream-floating.
+          python -m pip install -r witchcraft-src/requirements.txt
+        shell: bash
+
+      - name: cache hugging face hub downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-hub-google-xtr-base-en
+
+      - name: run downloadweights.py
+        run: |
+          set -euo pipefail
+          cd witchcraft-src
+          python downloadweights.py
+        shell: bash
+
+      - name: run quantize-openvino.py
+        run: |
+          set -euo pipefail
+          cd witchcraft-src
+          python quantize-openvino.py
+        shell: bash
+
+      - name: stage assets
+        id: stage
+        run: |
+          set -euo pipefail
+          out="xtr-int4-${{ steps.rev.outputs.short }}"
+          mkdir -p "$out"
+          cp witchcraft-src/assets/tokenizer.json "$out/"
+          cp witchcraft-src/assets/config.json    "$out/"
+          cp witchcraft-src/openvino_model/int4/xtr-ov-int4.xml "$out/"
+          cp witchcraft-src/openvino_model/int4/xtr-ov-int4.bin "$out/"
+          tarball="${out}.tar.gz"
+          tar -czf "$tarball" "$out"
+          sha256sum "$tarball" | awk '{print $1}' > "${out}.sha256"
+          ls -la "$out"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "sha256_file=${out}.sha256" >> "$GITHUB_OUTPUT"
+          echo "bundle_dir=$out" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xtr-int4-${{ steps.rev.outputs.short }}
+          path: |
+            ${{ steps.stage.outputs.tarball }}
+            ${{ steps.stage.outputs.sha256_file }}
+
+      - name: publish github release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARBALL: ${{ steps.stage.outputs.tarball }}
+          SHA_FILE: ${{ steps.stage.outputs.sha256_file }}
+          REV: ${{ steps.rev.outputs.short }}
+        run: |
+          set -euo pipefail
+          tag="witchcraft-assets-${REV}"
+          # If the release already exists, delete its existing assets so
+          # the upload-step doesn't choke on a conflict; otherwise create.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$TARBALL" "$SHA_FILE" --clobber
+          else
+            gh release create "$tag" \
+              --title "witchcraft xtr-int4 assets @ ${REV}" \
+              --notes "OpenVINO INT4-quantized XTR T5 encoder produced from dropbox/witchcraft@${REV} via downloadweights.py + quantize-openvino.py.
+
+Contents (inside the tarball, under \`xtr-int4-${REV}/\`):
+- tokenizer.json
+- config.json
+- xtr-ov-int4.xml
+- xtr-ov-int4.bin
+
+Scryd's daemon expects these four files in \`/var/lib/scryd/assets/\` (the install-script-staged location) before \`scryd serve\` is started." \
+              "$TARBALL" "$SHA_FILE"
+          fi
+        shell: bash
