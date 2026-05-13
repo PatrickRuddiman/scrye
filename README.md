@@ -176,35 +176,63 @@ sudo scryd remove-account <account-id>
 
 ### Unattended install (agent / provisioning recipe)
 
-A copy-pasteable end-to-end install that needs no human input —
-useful for provisioning scripts and AI-agent install workflows.
-Requires `gh` (or substitute `curl` against the Releases REST API),
-`tar`, `sudo`. Assumes the IMAP account secret is passed via
-`$IMAP_PASSWORD`:
+A copy-pasteable end-to-end install for provisioning scripts and AI
+agents. Requires only `curl`, `python3`, `tar`, `sudo`, and `systemd`
+on a Linux x86_64 / aarch64 host. The IMAP account secret is passed
+via the `$IMAP_PASSWORD` env var.
 
 ```sh
 set -euo pipefail
+
+# 1. Discover the latest release tarball URL for this arch.
 arch="$(uname -m)"   # x86_64 or aarch64
-asset="$(gh release view --repo PatrickRuddiman/scrye --json assets \
-    --jq ".assets[] | select(.name | endswith(\"${arch}-linux.tar.gz\")) | .url" \
-    | head -n1)"
-curl -fsSL -o /tmp/scryd.tar.gz "$asset"
-mkdir -p /tmp/scryd-install && tar -xzf /tmp/scryd.tar.gz -C /tmp/scryd-install --strip-components=1
+download_url="$(curl -fsSL https://api.github.com/repos/PatrickRuddiman/scrye/releases/latest \
+    | python3 -c "
+import json, sys
+arch = '$arch'
+data = json.load(sys.stdin)
+for a in data['assets']:
+    if a['name'].endswith(f'{arch}-linux.tar.gz'):
+        print(a['browser_download_url'])
+        break
+")"
+
+# 2. Fetch + extract + install. install.sh is idempotent — safe to
+#    re-run. It runs scryd-fetch-weights inline (~61 MB asset bundle
+#    download) and `systemctl enable --now scryd` before returning.
+curl -fsSL -o /tmp/scryd.tar.gz "$download_url"
+mkdir -p /tmp/scryd-install
+tar -xzf /tmp/scryd.tar.gz -C /tmp/scryd-install --strip-components=1
 sudo /tmp/scryd-install/install.sh
 
-printf '%s' "$IMAP_PASSWORD" | sudo /usr/local/bin/scryd add-account \
-    --account-id work \
-    --host imap.example.com \
-    --user alice@example.com \
-    --password-stdin \
-    --folders INBOX
+# 3. Poll for the daemon to be accepting. The systemd unit returns
+#    "started" before witchcraft finishes loading the model, so the
+#    socket may exist briefly before searches succeed.
+deadline=$(( $(date +%s) + 90 ))
+until scryd status >/dev/null 2>&1; do
+    [[ $(date +%s) -lt $deadline ]] || { echo "daemon not ready in 90s"; exit 1; }
+    sleep 2
+done
 
-# First daemon start triggers scryd-fetch-weights -> downloads the
-# ~61 MB witchcraft asset bundle into /var/lib/scryd/assets/. Tail
-# the journal until the daemon logs `serve_loop_running` if you want
-# a hard ready-signal:
-sudo journalctl -u scryd -f
+# 4. Add the IMAP account (idempotent: no-op when the id already
+#    exists in /status's JSON `accounts[]`).
+exists="$(scryd status 2>/dev/null \
+    | python3 -c "import json, sys
+print(any(a['account_id']=='work' for a in json.load(sys.stdin)['accounts']))
+" 2>/dev/null || echo False)"
+if [[ "$exists" != "True" ]]; then
+    printf '%s' "$IMAP_PASSWORD" | sudo scryd add-account \
+        --account-id work \
+        --host imap.example.com \
+        --user alice@example.com \
+        --password-stdin \
+        --folders INBOX
+fi
 ```
+
+For air-gapped or repo-pinned installs that don't depend on
+`/releases/latest`, substitute the literal release URL —
+e.g. `https://github.com/PatrickRuddiman/scrye/releases/download/v0.3.1/scryd-v0.3.1-x86_64-linux.tar.gz`.
 
 ### Uninstall
 
