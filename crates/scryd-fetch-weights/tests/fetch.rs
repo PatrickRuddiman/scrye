@@ -18,10 +18,9 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 const REQUIRED_FILES: &[&str] = &[
-    "tokenizer.json",
     "config.json",
-    "xtr-ov-int4.xml",
-    "xtr-ov-int4.bin",
+    "tokenizer.json",
+    "xtr.gguf",
 ];
 
 /// Build a small tarball matching the production layout (single top-
@@ -29,7 +28,7 @@ const REQUIRED_FILES: &[&str] = &[
 /// the tarball bytes and their SHA-256.
 fn build_fixture_tarball() -> (Vec<u8>, String) {
     let staging = TempDir::new().unwrap();
-    let bundle_dir = staging.path().join("xtr-int4-test");
+    let bundle_dir = staging.path().join("xtr-gguf-test");
     std::fs::create_dir(&bundle_dir).unwrap();
     for (i, name) in REQUIRED_FILES.iter().enumerate() {
         // Distinct contents so a sloppy extract that overwrites with
@@ -42,7 +41,7 @@ fn build_fixture_tarball() -> (Vec<u8>, String) {
         .arg(&tarball)
         .arg("-C")
         .arg(staging.path())
-        .arg("xtr-int4-test")
+        .arg("xtr-gguf-test")
         .status()
         .expect("tar -czf available on PATH");
     assert!(status.success(), "fixture tar -czf failed");
@@ -107,7 +106,7 @@ fn downloads_and_extracts_with_correct_hash() {
         let (bytes, sha) = build_fixture_tarball();
         let payload: &'static [u8] = Box::leak(bytes.into_boxed_slice());
         let (addr, _stop) = spawn_static_server(payload).await;
-        let url = format!("http://{addr}/xtr-int4.tar.gz");
+        let url = format!("http://{addr}/xtr-gguf.tar.gz");
         let dir = TempDir::new().unwrap();
         let target = dir.path().to_path_buf();
 
@@ -147,7 +146,7 @@ fn second_invocation_with_files_present_is_a_noop() {
         let (bytes, sha) = build_fixture_tarball();
         let payload: &'static [u8] = Box::leak(bytes.into_boxed_slice());
         let (addr, _stop) = spawn_static_server(payload).await;
-        let url = format!("http://{addr}/xtr-int4.tar.gz");
+        let url = format!("http://{addr}/xtr-gguf.tar.gz");
         let dir = TempDir::new().unwrap();
         let target = dir.path().to_path_buf();
 
@@ -214,7 +213,7 @@ fn hash_mismatch_fails_loudly_and_leaves_no_artifacts() {
         let (bytes, _sha) = build_fixture_tarball();
         let payload: &'static [u8] = Box::leak(bytes.into_boxed_slice());
         let (addr, _stop) = spawn_static_server(payload).await;
-        let url = format!("http://{addr}/xtr-int4.tar.gz");
+        let url = format!("http://{addr}/xtr-gguf.tar.gz");
         let dir = TempDir::new().unwrap();
         let target = dir.path().to_path_buf();
         let bogus_sha = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
