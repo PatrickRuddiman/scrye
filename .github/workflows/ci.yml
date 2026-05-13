@@ -61,31 +61,31 @@ jobs:
           sudo rm /usr/local/bin/scryd
         shell: bash
 
-      - name: cache xtr-int4 asset bundle
+      - name: cache xtr-gguf asset bundle
         id: cache-assets
         uses: actions/cache@v4
         with:
           path: assets-cache/
-          key: xtr-int4-${{ env.XTR_BUNDLE_SHA }}
+          key: xtr-gguf-${{ env.XTR_BUNDLE_SHA }}
         env:
-          XTR_BUNDLE_SHA: 1612302890b63bc836688fa716669cb0b531961ff1812818f4723acdb7b5289c
+          XTR_BUNDLE_SHA: 60fbdd2e4289542bac1c2c61ef63e064ed583df427f2d328ad90274547b7f177
 
-      - name: download xtr-int4 asset bundle if not cached
+      - name: download xtr-gguf asset bundle if not cached
         if: steps.cache-assets.outputs.cache-hit != 'true'
         env:
-          XTR_BUNDLE_URL: https://github.com/PatrickRuddiman/scrye/releases/download/witchcraft-assets-1370cd5/xtr-int4-1370cd5.tar.gz
-          XTR_BUNDLE_SHA: 1612302890b63bc836688fa716669cb0b531961ff1812818f4723acdb7b5289c
+          XTR_BUNDLE_URL: https://github.com/PatrickRuddiman/scrye/releases/download/witchcraft-assets-1370cd5/xtr-gguf-1370cd5.tar.gz
+          XTR_BUNDLE_SHA: 60fbdd2e4289542bac1c2c61ef63e064ed583df427f2d328ad90274547b7f177
         run: |
           set -euo pipefail
           mkdir -p assets-cache
-          curl -fsSL -o assets-cache/xtr-int4.tar.gz "$XTR_BUNDLE_URL"
-          actual="$(sha256sum assets-cache/xtr-int4.tar.gz | awk '{print $1}')"
+          curl -fsSL -o assets-cache/xtr-gguf.tar.gz "$XTR_BUNDLE_URL"
+          actual="$(sha256sum assets-cache/xtr-gguf.tar.gz | awk '{print $1}')"
           if [[ "$actual" != "$XTR_BUNDLE_SHA" ]]; then
-            echo "xtr-int4 bundle sha mismatch: $actual != $XTR_BUNDLE_SHA" >&2
+            echo "xtr-gguf bundle sha mismatch: $actual != $XTR_BUNDLE_SHA" >&2
             exit 1
           fi
-          tar -xzf assets-cache/xtr-int4.tar.gz -C assets-cache --strip-components=1
-          rm assets-cache/xtr-int4.tar.gz
+          tar -xzf assets-cache/xtr-gguf.tar.gz -C assets-cache --strip-components=1
+          rm assets-cache/xtr-gguf.tar.gz
         shell: bash
 
       - name: cargo test --workspace

@@ -66,11 +66,10 @@ pub async fn serve_init() -> Result<ServeContext, RuntimeError> {
 
     // Witchcraft is the production indexer. The sqlite file at
     // <data_dir>/witchcraft.sqlite is the persistence boundary —
-    // deleting it resets the index. The four asset files witchcraft
-    // loads at startup (tokenizer.json + config.json + xtr-ov-int4.xml
-    // + xtr-ov-int4.bin) live under <assets_dir>; scryd-fetch-weights
-    // downloads + extracts the bundle on first start when any are
-    // missing.
+    // deleting it resets the index. The three asset files witchcraft's
+    // t5-quantized backend loads (config.json, tokenizer.json,
+    // xtr.gguf) live under <assets_dir>; scryd-fetch-weights downloads
+    // + extracts the bundle on first start when any are missing.
     let assets = assets_dir()?;
     std::fs::create_dir_all(&assets).ok();
     let witchcraft_db = scryd_data.join("witchcraft.sqlite");
@@ -186,14 +185,14 @@ async fn wait_for_shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-/// Files witchcraft's `Embedder::new` expects in the assets dir.
-/// scryd-fetch-weights downloads + extracts the bundle that contains
-/// all four; this check just verifies what's on disk afterwards.
+/// Files witchcraft's `t5-quantized` backend loads from the assets
+/// dir. scryd-fetch-weights downloads + extracts the bundle that
+/// contains all three; this check just verifies what's on disk
+/// afterwards.
 const REQUIRED_WITCHCRAFT_ASSETS: &[&str] = &[
-    "tokenizer.json",
     "config.json",
-    "xtr-ov-int4.xml",
-    "xtr-ov-int4.bin",
+    "tokenizer.json",
+    "xtr.gguf",
 ];
 
 /// Ensure the witchcraft asset bundle is on disk before opening

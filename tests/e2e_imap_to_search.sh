@@ -67,15 +67,15 @@ note "running install.sh"
 # /var/lib/scryd with this container, so the outer prime step can't
 # touch /var/lib/scryd directly — it leaves the four files under
 # $REPO/assets-cache/ and we copy them in here (chowned to scryd).
-note "staging xtr-int4 assets into /var/lib/scryd/assets (if pre-fetched)"
-if [[ -d /workspace/assets-cache && -e /workspace/assets-cache/tokenizer.json ]]; then
+note "staging xtr-gguf assets into /var/lib/scryd/assets (if pre-fetched)"
+if [[ -d /workspace/assets-cache && -e /workspace/assets-cache/xtr.gguf ]]; then
     install -d -o scryd -g scryd -m 0755 /var/lib/scryd/assets
-    for f in tokenizer.json config.json xtr-ov-int4.xml xtr-ov-int4.bin; do
+    for f in config.json tokenizer.json xtr.gguf; do
         install -o scryd -g scryd -m 0644 "/workspace/assets-cache/$f" "/var/lib/scryd/assets/$f"
     done
-    echo "staged 4 xtr-int4 files into /var/lib/scryd/assets/"
+    echo "staged 3 xtr-gguf files into /var/lib/scryd/assets/"
 else
-    echo "WARN: /workspace/assets-cache/ missing tokenizer.json; daemon will auto-fetch on first start"
+    echo "WARN: /workspace/assets-cache/ missing xtr.gguf; daemon will auto-fetch on first start"
 fi
 
 note "writing /etc/scryd/config.toml pointing at GreenMail (two accounts)"

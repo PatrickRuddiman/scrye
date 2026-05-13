@@ -1,7 +1,8 @@
-//! Download the XTR INT4 OpenVINO asset bundle to `<target>/`, verify
-//! its SHA-256, and extract the four files witchcraft loads at runtime
-//! (`tokenizer.json`, `config.json`, `xtr-ov-int4.xml`, `xtr-ov-int4.bin`).
-//! Re-running the helper when all four are already present is a no-op.
+//! Download the XTR GGUF asset bundle to `<target>/`, verify its
+//! SHA-256, and extract the three files witchcraft's `t5-quantized`
+//! backend loads at runtime (`config.json`, `tokenizer.json`,
+//! `xtr.gguf`). Re-running the helper when all three are already
+//! present is a no-op.
 //!
 //! Under v0.3.1's service model the daemon spawns this helper on first
 //! start; uid is inherited from the systemd unit account (default: scryd).
@@ -16,11 +17,11 @@ use clap::Parser;
 use sha2::Digest;
 use tokio::io::AsyncWriteExt;
 
-/// Default URL of the xtr-int4 tarball. The
+/// Default URL of the xtr-gguf tarball. The
 /// `witchcraft-assets-<short-rev>` release is produced by
 /// `.github/workflows/witchcraft-assets.yml`.
 const DEFAULT_BUNDLE_URL: &str =
-    "https://github.com/PatrickRuddiman/scrye/releases/download/witchcraft-assets-1370cd5/xtr-int4-1370cd5.tar.gz";
+    "https://github.com/PatrickRuddiman/scrye/releases/download/witchcraft-assets-1370cd5/xtr-gguf-1370cd5.tar.gz";
 
 /// Pinned SHA-256 of the expected tarball. Resolution order:
 ///   1. `--sha256 <hex>` flag.
@@ -29,21 +30,20 @@ const DEFAULT_BUNDLE_URL: &str =
 ///      pipeline if it ever wants to pin a different rev without
 ///      editing the source).
 ///   4. The compile-time default below — the SHA-256 of the published
-///      `xtr-int4-1370cd5.tar.gz` asset.
+///      `xtr-gguf-1370cd5.tar.gz` asset.
 const DEFAULT_BUNDLE_SHA256: &str = match option_env!("WEIGHTS_SHA256") {
     Some(s) => s,
-    None => "1612302890b63bc836688fa716669cb0b531961ff1812818f4723acdb7b5289c",
+    None => "60fbdd2e4289542bac1c2c61ef63e064ed583df427f2d328ad90274547b7f177",
 };
 
-/// Files witchcraft's `Embedder::new` expects to find directly under
-/// the assets path. The tarball contains a single top-level directory
-/// with these four files; we extract with `--strip-components=1` so
-/// they land at `<target>/<filename>` regardless of the inner dirname.
+/// Files witchcraft's `t5-quantized` backend loads from the assets
+/// path. The tarball contains a single top-level directory with these
+/// three files; we extract with `--strip-components=1` so they land at
+/// `<target>/<filename>` regardless of the inner dirname.
 const REQUIRED_FILES: &[&str] = &[
-    "tokenizer.json",
     "config.json",
-    "xtr-ov-int4.xml",
-    "xtr-ov-int4.bin",
+    "tokenizer.json",
+    "xtr.gguf",
 ];
 
 const TMP_TARBALL_NAME: &str = ".fetch-tmp.tar.gz";
