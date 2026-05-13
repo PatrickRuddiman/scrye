@@ -102,7 +102,10 @@ printf '%s' "$IMAP_PASSWORD" | sudo scryd add-account \
 ```
 
 `--port` defaults to `993`; `--folders` defaults to `INBOX`.
-`--account-id` must match `^[a-z0-9_-]+$`.
+`--account-id` must match `^[a-z0-9_-]+$`. The verb is upsert-
+semantic on the id: re-running with the same `--account-id`
+overwrites the existing entry, so provisioning scripts and AI
+agents can call it unconditionally without checking first.
 
 The minimal hand-edited config:
 

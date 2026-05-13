@@ -126,7 +126,9 @@ printf '%s' "$IMAP_PASSWORD" | sudo scryd add-account \
 ```
 
 `--port` defaults to `993`; `--folders` defaults to `INBOX` if
-omitted. `account-id` must match `^[a-z0-9_-]+$`.
+omitted. `account-id` must match `^[a-z0-9_-]+$`. `add-account` is
+upsert-semantic on the id: re-running with the same `--account-id`
+overwrites the existing entry, so the call is safe to retry.
 
 The minimal `[[accounts]]` table for hand-editing
 `/etc/scryd/config.toml` directly:
@@ -214,20 +216,16 @@ until scryd status >/dev/null 2>&1; do
     sleep 2
 done
 
-# 4. Add the IMAP account (idempotent: no-op when the id already
-#    exists in /status's JSON `accounts[]`).
-exists="$(scryd status 2>/dev/null \
-    | python3 -c "import json, sys
-print(any(a['account_id']=='work' for a in json.load(sys.stdin)['accounts']))
-" 2>/dev/null || echo False)"
-if [[ "$exists" != "True" ]]; then
-    printf '%s' "$IMAP_PASSWORD" | sudo scryd add-account \
-        --account-id work \
-        --host imap.example.com \
-        --user alice@example.com \
-        --password-stdin \
-        --folders INBOX
-fi
+# 4. Add (or update) the IMAP account. `scryd add-account` is upsert-
+#    semantic on `--account-id`: re-running with the same id overwrites
+#    the existing entry, so it's safe to call unconditionally on agent
+#    retry without an existence check.
+printf '%s' "$IMAP_PASSWORD" | sudo scryd add-account \
+    --account-id work \
+    --host imap.example.com \
+    --user alice@example.com \
+    --password-stdin \
+    --folders INBOX
 ```
 
 For air-gapped or repo-pinned installs that don't depend on
