@@ -32,10 +32,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: install python 3.13
+      - name: install python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
 
       - name: short rev
         id: rev
@@ -55,9 +55,17 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # Pin openvino to the exact upstream version; torch / transformers
-          # / huggingface_hub / safetensors / nncf are upstream-floating.
-          python -m pip install -r witchcraft-src/requirements.txt
+          # Pin torch + transformers to versions contemporaneous with the
+          # witchcraft commit; upstream's requirements.txt floats and the
+          # latest transformers broke the sdpa_mask path the script's
+          # OpenVINO tracing relies on. openvino is pinned upstream.
+          python -m pip install \
+            "torch==2.4.1" \
+            "transformers==4.46.3" \
+            "huggingface_hub" \
+            "safetensors" \
+            "openvino==2026.0.0" \
+            "nncf"
         shell: bash
 
       - name: cache hugging face hub downloads
