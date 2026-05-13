@@ -1,13 +1,15 @@
 name: witchcraft-assets
 
-# Build the XTR INT4 OpenVINO asset bundle that scryd's daemon
-# consumes at runtime. Pinned to a specific dropbox/witchcraft
-# revision; the upstream python pipeline produces the asset set:
-#   tokenizer.json
+# Build the XTR GGUF asset bundle scryd's daemon consumes at runtime.
+# scryd-search is built with witchcraft's `t5-quantized` backend
+# (mirrors the upstream `make warp-cli` feature set), which loads:
 #   config.json
-#   xtr-ov-int4.xml
-#   xtr-ov-int4.bin
-# The output is uploaded to a GitHub release tagged
+#   tokenizer.json
+#   xtr.gguf
+# `downloadweights.py` produces config.json + tokenizer.json +
+# xtr.safetensors from `google/xtr-base-en`; the upstream
+# `quantize-tool` rust binary converts xtr.safetensors -> xtr.gguf.
+# The three result files are uploaded to a github release tagged
 # `witchcraft-assets-<short-rev>` so scryd's release.yml and the
 # install-time fetcher can curl a fixed URL with a pinned SHA-256.
 #
@@ -51,21 +53,24 @@ jobs:
           (cd witchcraft-src && git checkout "$WITCHCRAFT_REV")
         shell: bash
 
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: install python deps
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          # Pin torch + transformers to versions contemporaneous with the
-          # witchcraft commit; upstream's requirements.txt floats and the
-          # latest transformers broke the sdpa_mask path the script's
-          # OpenVINO tracing relies on. openvino is pinned upstream.
+          # The t5-quantized path only needs the python pieces that
+          # downloadweights.py exercises (torch+transformers to load
+          # google/xtr-base-en, safetensors to write the intermediate
+          # bundle, huggingface_hub for the snapshot download).
+          # openvino + nncf are skipped — quantize-tool (rust) does
+          # the GGUF conversion.
           python -m pip install \
             "torch==2.4.1" \
             "transformers==4.46.3" \
             "huggingface_hub" \
-            "safetensors" \
-            "openvino==2026.0.0" \
-            "nncf"
+            "safetensors"
         shell: bash
 
       - name: cache hugging face hub downloads
@@ -81,23 +86,27 @@ jobs:
           python downloadweights.py
         shell: bash
 
-      - name: run quantize-openvino.py
+      - name: run quantize-tool (xtr.safetensors -> assets/xtr.gguf)
         run: |
           set -euo pipefail
           cd witchcraft-src
-          python quantize-openvino.py
+          # quantize-tool ingests xtr.safetensors (produced by
+          # downloadweights.py at the repo root) and writes the
+          # GGUF-quantized weights to assets/xtr.gguf, alongside
+          # the config.json / tokenizer.json the script already
+          # copied there.
+          cargo run -p quantize-tool --release -- xtr.safetensors assets/xtr.gguf
         shell: bash
 
       - name: stage assets
         id: stage
         run: |
           set -euo pipefail
-          out="xtr-int4-${{ steps.rev.outputs.short }}"
+          out="xtr-gguf-${{ steps.rev.outputs.short }}"
           mkdir -p "$out"
-          cp witchcraft-src/assets/tokenizer.json "$out/"
           cp witchcraft-src/assets/config.json    "$out/"
-          cp witchcraft-src/openvino_model/int4/xtr-ov-int4.xml "$out/"
-          cp witchcraft-src/openvino_model/int4/xtr-ov-int4.bin "$out/"
+          cp witchcraft-src/assets/tokenizer.json "$out/"
+          cp witchcraft-src/assets/xtr.gguf       "$out/"
           tarball="${out}.tar.gz"
           tar -czf "$tarball" "$out"
           sha256sum "$tarball" | awk '{print $1}' > "${out}.sha256"
@@ -110,7 +119,7 @@ jobs:
       - name: upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: xtr-int4-${{ steps.rev.outputs.short }}
+          name: xtr-gguf-${{ steps.rev.outputs.short }}
           path: |
             ${{ steps.stage.outputs.tarball }}
             ${{ steps.stage.outputs.sha256_file }}
@@ -128,15 +137,14 @@ jobs:
           # the upload-step doesn't choke on a conflict; otherwise create.
           notes_file="$(mktemp)"
           cat > "$notes_file" <<EOF
-          OpenVINO INT4-quantized XTR T5 encoder produced from dropbox/witchcraft@${REV} via downloadweights.py + quantize-openvino.py.
+          GGUF-quantized XTR T5 encoder produced from dropbox/witchcraft@${REV} via downloadweights.py + cargo run -p quantize-tool.
 
-          Contents (inside the tarball, under \`xtr-int4-${REV}/\`):
-          - tokenizer.json
+          Contents (inside the tarball, under \`xtr-gguf-${REV}/\`):
           - config.json
-          - xtr-ov-int4.xml
-          - xtr-ov-int4.bin
+          - tokenizer.json
+          - xtr.gguf
 
-          Scryd's daemon expects these four files in \`/var/lib/scryd/assets/\` (the install-script-staged location) before \`scryd serve\` is started.
+          Scryd's daemon expects these three files in \`/var/lib/scryd/assets/\` (the install-script-staged location) before \`scryd serve\` is started.
           EOF
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$TARBALL" "$SHA_FILE" --clobber
