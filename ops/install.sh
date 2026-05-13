@@ -90,9 +90,13 @@ fi
 
 if [[ $SKIP_WEIGHTS -eq 0 ]]; then
     sudo -u scryd /usr/local/bin/scryd-fetch-weights --target /var/lib/scryd/assets/
-    if [[ -e /var/lib/scryd/assets/xtr-weights.gguf ]]; then
-        chmod 0644 /var/lib/scryd/assets/xtr-weights.gguf
-    fi
+    # The bundle extracts to a handful of named files; widen their
+    # mode so non-scryd processes can read them at search time.
+    for f in tokenizer.json config.json xtr-ov-int4.xml xtr-ov-int4.bin; do
+        if [[ -e /var/lib/scryd/assets/$f ]]; then
+            chmod 0644 /var/lib/scryd/assets/$f
+        fi
+    done
 fi
 
 if [[ $SKIP_SYSTEMCTL -eq 0 ]]; then

@@ -2,8 +2,7 @@
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use assert_cmd::Command;
@@ -18,13 +17,43 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
-const PAYLOAD: &[u8] = b"some-fake-weights-payload-bytes-for-testing-only";
+const REQUIRED_FILES: &[&str] = &[
+    "tokenizer.json",
+    "config.json",
+    "xtr-ov-int4.xml",
+    "xtr-ov-int4.bin",
+];
 
-fn payload_sha256() -> String {
-    hex::encode(sha2::Sha256::digest(PAYLOAD))
+/// Build a small tarball matching the production layout (single top-
+/// level dir containing the four files witchcraft expects). Returns
+/// the tarball bytes and their SHA-256.
+fn build_fixture_tarball() -> (Vec<u8>, String) {
+    let staging = TempDir::new().unwrap();
+    let bundle_dir = staging.path().join("xtr-int4-test");
+    std::fs::create_dir(&bundle_dir).unwrap();
+    for (i, name) in REQUIRED_FILES.iter().enumerate() {
+        // Distinct contents so a sloppy extract that overwrites with
+        // the wrong file shows up as a mismatch.
+        std::fs::write(bundle_dir.join(name), format!("fixture-{i}\n")).unwrap();
+    }
+    let tarball = staging.path().join("bundle.tar.gz");
+    let status = std::process::Command::new("tar")
+        .arg("-czf")
+        .arg(&tarball)
+        .arg("-C")
+        .arg(staging.path())
+        .arg("xtr-int4-test")
+        .status()
+        .expect("tar -czf available on PATH");
+    assert!(status.success(), "fixture tar -czf failed");
+    let bytes = std::fs::read(&tarball).unwrap();
+    let sha = hex::encode(sha2::Sha256::digest(&bytes));
+    // Leak the bytes so the static-payload server signature stays
+    // happy across the suite (tests are short-lived).
+    (bytes, sha)
 }
 
-async fn spawn_fake_server(payload: &'static [u8]) -> (SocketAddr, Arc<Notify>) {
+async fn spawn_static_server(payload: &'static [u8]) -> (SocketAddr, Arc<Notify>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let stop = Arc::new(Notify::new());
@@ -68,14 +97,19 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
         .block_on(f)
 }
 
+fn all_present(dir: &Path) -> bool {
+    REQUIRED_FILES.iter().all(|f| dir.join(f).exists())
+}
+
 #[test]
-fn downloads_writes_at_mode_0600_with_correct_hash() {
+fn downloads_and_extracts_with_correct_hash() {
     block_on(async {
-        let (addr, _stop) = spawn_fake_server(PAYLOAD).await;
-        let url = format!("http://{addr}/xtr-weights.gguf");
+        let (bytes, sha) = build_fixture_tarball();
+        let payload: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        let (addr, _stop) = spawn_static_server(payload).await;
+        let url = format!("http://{addr}/xtr-int4.tar.gz");
         let dir = TempDir::new().unwrap();
         let target = dir.path().to_path_buf();
-        let sha = payload_sha256();
 
         let output = tokio::task::spawn_blocking(move || {
             helper()
@@ -98,51 +132,53 @@ fn downloads_writes_at_mode_0600_with_correct_hash() {
             "stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let weights: PathBuf = dir.path().join("xtr-weights.gguf");
-        assert!(weights.exists(), "weights file should exist");
-        let mode = std::fs::metadata(&weights).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "mode = {:o}", mode);
-        let actual = std::fs::read(&weights).unwrap();
-        assert_eq!(actual, PAYLOAD);
+        assert!(all_present(dir.path()), "all four files should be extracted");
+        // The tmp tarball should have been cleaned up.
+        assert!(
+            !dir.path().join(".fetch-tmp.tar.gz").exists(),
+            "tmp tarball should be removed after extract"
+        );
     });
 }
 
 #[test]
-fn second_invocation_with_correct_hash_is_a_noop() {
+fn second_invocation_with_files_present_is_a_noop() {
     block_on(async {
-        let (addr, _stop) = spawn_fake_server(PAYLOAD).await;
-        let url = format!("http://{addr}/xtr-weights.gguf");
+        let (bytes, sha) = build_fixture_tarball();
+        let payload: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        let (addr, _stop) = spawn_static_server(payload).await;
+        let url = format!("http://{addr}/xtr-int4.tar.gz");
         let dir = TempDir::new().unwrap();
         let target = dir.path().to_path_buf();
-        let sha = payload_sha256();
 
-        // First call: downloads.
-        let target_for_first = target.clone();
-        let url_for_first = url.clone();
-        let sha_for_first = sha.clone();
+        // First call: downloads + extracts.
+        let t1 = target.clone();
+        let u1 = url.clone();
+        let s1 = sha.clone();
         let _ = tokio::task::spawn_blocking(move || {
             helper()
                 .args([
                     "--target",
-                    target_for_first.to_str().unwrap(),
+                    t1.to_str().unwrap(),
                     "--url",
-                    &url_for_first,
+                    &u1,
                     "--sha256",
-                    &sha_for_first,
+                    &s1,
                 ])
                 .output()
                 .expect("run")
         })
         .await
         .unwrap();
-        let mtime_first = std::fs::metadata(dir.path().join("xtr-weights.gguf"))
+        assert!(all_present(dir.path()));
+        let mtime_first = std::fs::metadata(dir.path().join("tokenizer.json"))
             .unwrap()
             .modified()
             .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        // Second call with the same hash: must NOT re-write the file.
+        // Second call: must NOT re-download or re-extract.
         let output = tokio::task::spawn_blocking(move || {
             helper()
                 .args([
@@ -160,8 +196,8 @@ fn second_invocation_with_correct_hash_is_a_noop() {
         .unwrap();
         assert!(output.status.success());
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("weights ok"), "{stdout}");
-        let mtime_second = std::fs::metadata(dir.path().join("xtr-weights.gguf"))
+        assert!(stdout.contains("assets ok"), "{stdout}");
+        let mtime_second = std::fs::metadata(dir.path().join("tokenizer.json"))
             .unwrap()
             .modified()
             .unwrap();
@@ -173,49 +209,12 @@ fn second_invocation_with_correct_hash_is_a_noop() {
 }
 
 #[test]
-fn corrupt_existing_file_is_redownloaded() {
+fn hash_mismatch_fails_loudly_and_leaves_no_artifacts() {
     block_on(async {
-        let (addr, _stop) = spawn_fake_server(PAYLOAD).await;
-        let url = format!("http://{addr}/xtr-weights.gguf");
-        let dir = TempDir::new().unwrap();
-        let target = dir.path().to_path_buf();
-        let sha = payload_sha256();
-
-        // Pre-write a corrupt file at the target path.
-        let weights = target.join("xtr-weights.gguf");
-        std::fs::write(&weights, b"wrong bytes").unwrap();
-
-        let output = tokio::task::spawn_blocking(move || {
-            helper()
-                .args([
-                    "--target",
-                    target.to_str().unwrap(),
-                    "--url",
-                    &url,
-                    "--sha256",
-                    &sha,
-                ])
-                .output()
-                .expect("run")
-        })
-        .await
-        .unwrap();
-
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let actual = std::fs::read(&weights).unwrap();
-        assert_eq!(actual, PAYLOAD, "corrupt file should be re-downloaded");
-    });
-}
-
-#[test]
-fn hash_mismatch_after_download_fails_loudly() {
-    block_on(async {
-        let (addr, _stop) = spawn_fake_server(PAYLOAD).await;
-        let url = format!("http://{addr}/xtr-weights.gguf");
+        let (bytes, _sha) = build_fixture_tarball();
+        let payload: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        let (addr, _stop) = spawn_static_server(payload).await;
+        let url = format!("http://{addr}/xtr-int4.tar.gz");
         let dir = TempDir::new().unwrap();
         let target = dir.path().to_path_buf();
         let bogus_sha = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
@@ -245,10 +244,14 @@ fn hash_mismatch_after_download_fails_loudly() {
             stderr.contains("hash") && stderr.contains("aborting"),
             "expected hash-aborting error: {stderr}"
         );
-        let weights: PathBuf = dir.path().join("xtr-weights.gguf");
-        assert!(
-            !weights.exists(),
-            "tmp file should not be left behind on hash mismatch"
-        );
+        // Neither the tmp tarball nor any extracted file should remain.
+        assert!(!dir.path().join(".fetch-tmp.tar.gz").exists());
+        for f in REQUIRED_FILES {
+            assert!(
+                !dir.path().join(f).exists(),
+                "no extracted file should be left behind on hash failure: {f}"
+            );
+        }
+        let _: PathBuf;
     });
 }

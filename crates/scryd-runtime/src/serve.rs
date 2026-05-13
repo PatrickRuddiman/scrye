@@ -66,9 +66,10 @@ pub async fn serve_init() -> Result<ServeContext, RuntimeError> {
 
     // Witchcraft is the production indexer. The sqlite file at
     // <data_dir>/witchcraft.sqlite is the persistence boundary —
-    // deleting it resets the index. Weights live at
-    // <assets_dir>/xtr-weights.gguf and are loaded lazily on the
-    // first search; task 08 auto-fetches them on first start when
+    // deleting it resets the index. The four asset files witchcraft
+    // loads at startup (tokenizer.json + config.json + xtr-ov-int4.xml
+    // + xtr-ov-int4.bin) live under <assets_dir>; scryd-fetch-weights
+    // downloads + extracts the bundle on first start when any are
     // missing.
     let assets = assets_dir()?;
     std::fs::create_dir_all(&assets).ok();
@@ -185,20 +186,48 @@ async fn wait_for_shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-/// Ensure `<assets_dir>/xtr-weights.gguf` is on disk before opening
-/// the indexer. Task 08 wires the auto-fetch path; task 06 just
-/// surfaces a clear error when the file is missing.
+/// Files witchcraft's `Embedder::new` expects in the assets dir.
+/// scryd-fetch-weights downloads + extracts the bundle that contains
+/// all four; this check just verifies what's on disk afterwards.
+const REQUIRED_WITCHCRAFT_ASSETS: &[&str] = &[
+    "tokenizer.json",
+    "config.json",
+    "xtr-ov-int4.xml",
+    "xtr-ov-int4.bin",
+];
+
+/// Ensure the witchcraft asset bundle is on disk before opening
+/// the indexer. Calls `scryd-fetch-weights` to download + extract
+/// when any of the four required files is missing.
 async fn ensure_weights_present(assets: &std::path::Path) -> Result<(), RuntimeError> {
-    let weights = assets.join("xtr-weights.gguf");
-    if weights.exists() {
+    if REQUIRED_WITCHCRAFT_ASSETS
+        .iter()
+        .all(|f| assets.join(f).exists())
+    {
         return Ok(());
     }
-    auto_fetch_weights(assets).await
+    auto_fetch_weights(assets).await?;
+    // Sanity check: after fetch the four files must exist.
+    let missing: Vec<&str> = REQUIRED_WITCHCRAFT_ASSETS
+        .iter()
+        .copied()
+        .filter(|f| !assets.join(f).exists())
+        .collect();
+    if !missing.is_empty() {
+        return Err(RuntimeError::PermissionInvariant {
+            path: assets.to_path_buf(),
+            reason: format!("fetcher succeeded but assets still missing: {missing:?}"),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
 async fn auto_fetch_weights(assets: &std::path::Path) -> Result<(), RuntimeError> {
-    log_lifecycle!(kind = kind::STARTUP, info = "fetching xtr-weights.gguf on first start");
+    log_lifecycle!(
+        kind = kind::STARTUP,
+        info = "fetching xtr-int4 asset bundle on first start"
+    );
     let bin = std::env::var("SCRYD_FETCH_WEIGHTS_BIN")
         .unwrap_or_else(|_| "/usr/local/bin/scryd-fetch-weights".to_string());
     let assets_owned = assets.to_path_buf();
@@ -211,16 +240,16 @@ async fn auto_fetch_weights(assets: &std::path::Path) -> Result<(), RuntimeError
     })
     .await
     .map_err(|e| RuntimeError::PermissionInvariant {
-        path: assets.join("xtr-weights.gguf"),
+        path: assets.to_path_buf(),
         reason: format!("auto-fetch join: {e}"),
     })?
     .map_err(|e| RuntimeError::PermissionInvariant {
-        path: assets.join("xtr-weights.gguf"),
+        path: assets.to_path_buf(),
         reason: format!("invoke {bin}: {e}"),
     })?;
     if !status.success() {
         return Err(RuntimeError::PermissionInvariant {
-            path: assets.join("xtr-weights.gguf"),
+            path: assets.to_path_buf(),
             reason: format!("{bin} exited {status}"),
         });
     }

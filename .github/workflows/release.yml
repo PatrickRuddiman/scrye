@@ -72,13 +72,33 @@ jobs:
           sudo rm /usr/local/bin/scryd
         shell: bash
 
-      - name: cache T5 weights bundle
+      - name: cache xtr-int4 asset bundle
         if: matrix.cross == false
-        id: cache-weights
+        id: cache-assets
         uses: actions/cache@v4
         with:
-          path: weights-cache/xtr-weights.gguf
-          key: xtr-weights-${{ hashFiles('crates/scryd-fetch-weights/src/main.rs') }}
+          path: assets-cache/
+          key: xtr-int4-${{ env.XTR_BUNDLE_SHA }}
+        env:
+          XTR_BUNDLE_SHA: 1612302890b63bc836688fa716669cb0b531961ff1812818f4723acdb7b5289c
+
+      - name: download xtr-int4 asset bundle if not cached
+        if: matrix.cross == false && steps.cache-assets.outputs.cache-hit != 'true'
+        env:
+          XTR_BUNDLE_URL: https://github.com/PatrickRuddiman/scrye/releases/download/witchcraft-assets-1370cd5/xtr-int4-1370cd5.tar.gz
+          XTR_BUNDLE_SHA: 1612302890b63bc836688fa716669cb0b531961ff1812818f4723acdb7b5289c
+        run: |
+          set -euo pipefail
+          mkdir -p assets-cache
+          curl -fsSL -o assets-cache/xtr-int4.tar.gz "$XTR_BUNDLE_URL"
+          actual="$(sha256sum assets-cache/xtr-int4.tar.gz | awk '{print $1}')"
+          if [[ "$actual" != "$XTR_BUNDLE_SHA" ]]; then
+            echo "xtr-int4 bundle sha mismatch: $actual != $XTR_BUNDLE_SHA" >&2
+            exit 1
+          fi
+          tar -xzf assets-cache/xtr-int4.tar.gz -C assets-cache --strip-components=1
+          rm assets-cache/xtr-int4.tar.gz
+        shell: bash
 
       - name: cargo test --workspace
         if: matrix.cross == false
@@ -107,14 +127,14 @@ jobs:
           cp target/${{ matrix.target }}/release/scryd-fetch-weights target/release/scryd-fetch-weights
         shell: bash
 
-      - name: prime weights cache for e2e
+      - name: stage xtr-int4 assets into /var/lib/scryd/assets
         if: matrix.cross == false
         run: |
           set -euo pipefail
-          if [[ -f weights-cache/xtr-weights.gguf ]]; then
-            sudo install -d -o root -g root -m 0755 /var/lib/scryd/assets
-            sudo install -m 0644 weights-cache/xtr-weights.gguf /var/lib/scryd/assets/xtr-weights.gguf
-          fi
+          sudo install -d -o scryd -g scryd -m 0755 /var/lib/scryd/assets
+          for f in tokenizer.json config.json xtr-ov-int4.xml xtr-ov-int4.bin; do
+            sudo install -o scryd -g scryd -m 0644 "assets-cache/$f" "/var/lib/scryd/assets/$f"
+          done
         shell: bash
 
       - name: e2e imap-to-search smoke
@@ -125,17 +145,6 @@ jobs:
           # debian:bookworm container with --network host so the inner
           # container reaches GreenMail at 127.0.0.1:3143.
           bash tests/e2e_imap_to_search.sh
-        shell: bash
-
-      - name: stash weights for next cache save
-        if: always() && matrix.cross == false
-        run: |
-          set -euo pipefail
-          if [[ -f /var/lib/scryd/assets/xtr-weights.gguf ]]; then
-            mkdir -p weights-cache
-            sudo cp /var/lib/scryd/assets/xtr-weights.gguf weights-cache/xtr-weights.gguf
-            sudo chown "$(id -u)":"$(id -g)" weights-cache/xtr-weights.gguf
-          fi
         shell: bash
 
       - name: package tarball
