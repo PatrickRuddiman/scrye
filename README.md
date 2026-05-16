@@ -146,6 +146,11 @@ folders = ["INBOX"]
 # tls_ca_path = "/etc/scryd/work-ca.pem"
 ```
 
+`tls_ca_path` is config-only — `scryd add-account` has no
+`--tls-ca-path` flag. For corporate / self-signed IMAP, run
+`add-account` first, then hand-edit the `[[accounts]]` block and
+`sudo systemctl restart scryd`.
+
 ### Verify it's working
 
 ```sh
@@ -226,7 +231,32 @@ printf '%s' "$IMAP_PASSWORD" | sudo scryd add-account \
     --user alice@example.com \
     --password-stdin \
     --folders INBOX
+
+# 5. Confirm the account is actually indexing. `scryd status` prints
+#    JSON; `accounts[].last_seen_uid` flips to non-null once the
+#    supervisor has fetched any message from the primary folder.
+#    Budget generously — large mailboxes take minutes on the first
+#    pass. Returning empty `accounts` means the daemon hasn't read
+#    the reconciled config yet; keep polling.
+deadline=$(( $(date +%s) + 600 ))
+until scryd status \
+    | python3 -c "
+import json, sys
+s = json.load(sys.stdin)
+acct = next((a for a in s['accounts'] if a['account_id'] == 'work'), None)
+sys.exit(0 if acct and acct.get('last_seen_uid') else 1)
+"; do
+    [[ $(date +%s) -lt $deadline ]] || { echo "account 'work' did not begin indexing in 10m"; exit 1; }
+    sleep 5
+done
+
 ```
+
+Note that `last_seen_uid` confirms the IMAP fetch is making progress
+but not that searches will return hits yet — the witchcraft drainer
+runs slightly behind the meta DB on large initial syncs. If `scryd
+search` returns empty immediately after step 5 succeeds, wait or
+call `scryd reindex` to force a drain pass.
 
 For air-gapped or repo-pinned installs that don't depend on
 `/releases/latest`, substitute the literal release URL —

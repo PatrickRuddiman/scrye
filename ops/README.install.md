@@ -143,6 +143,65 @@ sudo scryd rotate-password <account-id>
 sudo scryd remove-account <account-id>
 ```
 
+## `scryd status` output contract
+
+`scryd status` is the readiness and progress probe — provisioning
+scripts and agents lean on it. The contract:
+
+- **Exit 0** iff the daemon is reachable on `/run/scryd/scryd.sock`.
+  Non-zero means the daemon isn't running, the socket isn't mode-
+  reachable from the calling UID, or the HTTP call returned a non-2xx.
+- **Stdout is JSON** with shape:
+
+  ```json
+  {
+    "ok": true,
+    "uptime_secs": 1234,
+    "accounts": [
+      {
+        "account_id": "work",
+        "folders": ["INBOX"],
+        "health": "Healthy",
+        "last_sync_unix": 1731600000,
+        "last_seen_uid": 4271
+      }
+    ]
+  }
+  ```
+
+  `last_seen_uid` is `null` until the IMAP supervisor has fetched at
+  least one message from the primary folder. `last_sync_unix` is
+  `null` until the first complete sync pass finishes. `accounts` is
+  empty if no `[[accounts]]` are configured or the daemon hasn't
+  picked up a freshly-reconciled config yet.
+
+No `--json` flag exists because the body is JSON by default — pipe
+straight into `jq` or `python3 -m json.tool`.
+
+## TLS to corporate / self-signed IMAP servers
+
+`tls_ca_path` is **config-only** — `scryd add-account` does not
+accept a `--tls-ca-path` flag. For self-signed corporate IMAP, run
+`add-account` first, then hand-edit `/etc/scryd/config.toml` to add
+the field on the `[[accounts]]` block:
+
+```toml
+[[accounts]]
+id = "work"
+host = "imap.example.com"
+port = 993
+user = "alice@example.com"
+password = "..."
+tls = true
+folders = ["INBOX"]
+tls_ca_path = "/etc/scryd/work-ca.pem"
+```
+
+Then `sudo systemctl restart scryd` (the unit has no `ExecReload`,
+and hand-edits don't trigger the `/internal/reconcile` path that
+the CLI verbs use). The CA PEM must be readable by the `scryd`
+user.
+
 ## Witchcraft asset bundle
 
 On first start the daemon checks `/var/lib/scryd/assets/` for
