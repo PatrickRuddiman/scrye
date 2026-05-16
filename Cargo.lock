@@ -3443,6 +3443,7 @@ dependencies = [
  "predicates",
  "regex",
  "rpassword",
+ "rustls",
  "scryd-config",
  "scryd-log",
  "scryd-runtime",

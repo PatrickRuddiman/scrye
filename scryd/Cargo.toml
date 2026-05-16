@@ -20,6 +20,13 @@ thiserror = { workspace = true }
 scryd-config = { path = "../crates/scryd-config" }
 scryd-runtime = { path = "../crates/scryd-runtime" }
 scryd-log = { path = "../crates/scryd-log" }
+# Direct rustls dep so `main()` can install the aws-lc-rs crypto
+# provider at process startup. Workspace feature unification with
+# `scryd-fetch-weights` (which pulls reqwest's rustls-tls path,
+# enabling the `ring` provider) means rustls 0.23 sees both
+# providers compiled in and refuses to auto-select — picking
+# explicitly here is the fix.
+rustls = { workspace = true }
 urlencoding = "2"
 is-terminal = "0.4"
 toml_edit = { workspace = true }
