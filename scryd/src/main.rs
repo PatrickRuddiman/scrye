@@ -206,7 +206,19 @@ fn run_status() {
 }
 
 fn run_serve() {
+    // Leave 2 cores for the rest of the system. tokio's default is
+    // num_cpus, which is too greedy for a background indexer that
+    // also competes with the witchcraft embedding work on the
+    // blocking pool. `available_parallelism` reads cgroup limits,
+    // so a daemon under `CPUQuota=200%` sees 2 not the host count.
+    let workers = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .saturating_sub(2)
+        .max(1);
+
     let rt = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
         .enable_all()
         .build()
     {
