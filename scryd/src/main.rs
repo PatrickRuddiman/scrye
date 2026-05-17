@@ -111,6 +111,17 @@ struct SearchArgs {
 }
 
 fn main() {
+    // Workspace feature unification leaves rustls with both
+    // `aws-lc-rs` (via scryd-imap / tokio-rustls defaults) and
+    // `ring` (via scryd-fetch-weights → reqwest's rustls-tls
+    // path) compiled in. rustls 0.23 refuses to auto-select when
+    // both are present and panics on the first `ClientConfig::
+    // builder()` call. Pick aws-lc-rs explicitly at process
+    // startup so every TLS code path inherits a known provider.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("install rustls aws-lc-rs crypto provider");
+
     let cli = Cli::parse();
     match cli.verb {
         Verb::Serve => run_serve(),
