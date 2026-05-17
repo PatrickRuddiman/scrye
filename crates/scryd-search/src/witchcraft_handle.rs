@@ -9,9 +9,10 @@
 //!     for every Indexer trait call.
 //!   - `submit` / `remove` / `truncate` only mutate the DB and flip a
 //!     `dirty` flag. They do NOT run `embed_chunks` / `index_chunks` —
-//!     that work is amortized into the next `search` call. Drainer-driven
-//!     batches therefore pay one embed+index cost per query, not per
-//!     submit (which would defeat the queue's batching value).
+//!     that work is done by the drainer's `flush_pending` call after
+//!     each non-empty batch, keeping the expensive embed pass in
+//!     producer cadence so `search` is a pure read that returns
+//!     whatever's currently in the index.
 //!   - `MessageId` → witchcraft's required `Uuid` via `Uuid::new_v5` over
 //!     a fixed namespace + the id bytes. Deterministic, stable across
 //!     restarts.
@@ -153,6 +154,17 @@ impl Indexer for WitchcraftIndexer {
         Ok(())
     }
 
+    async fn flush_pending(&self) -> Result<(), IndexError> {
+        let state = self.state.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = state.lock().expect("witchcraft state mutex not poisoned");
+            flush_pending(&mut guard)
+        })
+        .await
+        .map_err(|e| IndexError::Upstream(format!("flush join: {e}")))??;
+        Ok(())
+    }
+
     async fn search(&self, query: &SearchQuery) -> Result<SearchResponse, SearchError> {
         let state = self.state.clone();
         let q = query.q.clone();
@@ -160,7 +172,6 @@ impl Indexer for WitchcraftIndexer {
         let k = query.k;
         let response = tokio::task::spawn_blocking(move || {
             let mut guard = state.lock().expect("witchcraft state mutex not poisoned");
-            flush_pending(&mut guard).map_err(|e| SearchError::Upstream(e.to_string()))?;
 
             let State {
                 ref db,

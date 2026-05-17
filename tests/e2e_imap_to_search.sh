@@ -167,6 +167,19 @@ if [[ "$COUNT" -lt 50 ]]; then
 fi
 note "indexed $COUNT messages"
 
+# v0.3.4: the drainer now embeds in producer cadence (flush after each
+# batch) instead of lazy-flushing on first search. Wait for the queue
+# to drain before searching, otherwise the search may legitimately
+# return zero hits if witchcraft hasn't caught up yet.
+note "polling /var/lib/scryd/meta.sqlite index_queue for drain completion"
+QUEUE=$(sqlite3 /var/lib/scryd/meta.sqlite 'SELECT count(*) FROM index_queue WHERE failed_permanent = 0' 2>/dev/null || echo 0)
+DEADLINE=$(($(date +%s) + 120))
+while [[ "$QUEUE" -gt 0 && $(date +%s) -lt $DEADLINE ]]; do
+    sleep 1
+    QUEUE=$(sqlite3 /var/lib/scryd/meta.sqlite 'SELECT count(*) FROM index_queue WHERE failed_permanent = 0' 2>/dev/null || echo 0)
+done
+note "index_queue depth after drain wait: $QUEUE"
+
 note "running scryd search (open socket; no sudo needed)"
 HITS_OUT=$(XDG_RUNTIME_DIR=/run/scryd \
     /usr/local/bin/scryd search "e2e" --limit 5 --json 2>&1 || true)

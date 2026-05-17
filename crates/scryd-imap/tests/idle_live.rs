@@ -52,7 +52,8 @@ async fn run_idle_loop_picks_up_new_inject_within_budget() {
     let sink = std::sync::Arc::new(support::test_sink::CollectingSink::new());
     let mut conn = Connection::new("idle-test", "INBOX");
 
-    run_initial_backfill(&mut conn, &mut client, sink.as_ref())
+    let (_backfill_shutdown_tx, backfill_shutdown_rx) = tokio::sync::watch::channel(false);
+    run_initial_backfill(&mut conn, &mut client, sink.as_ref(), backfill_shutdown_rx)
         .await
         .expect("backfill");
     let watermark = sink

@@ -295,7 +295,7 @@ async fn run_account_supervisor(
         match cycle_result {
             Ok(()) => {
                 consecutive_failures = 0;
-                update_health(&sink, &account_id, &folder, "active").await;
+                update_health(&account_id, &folder, sink.as_ref(), "active").await;
             }
             Err(err) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
@@ -305,7 +305,7 @@ async fn run_account_supervisor(
                     ClientError::TlsHandshake(_) => "tls-failure",
                     _ => "transient",
                 };
-                update_health(&sink, &account_id, &folder, health).await;
+                update_health(&account_id, &folder, sink.as_ref(), health).await;
 
                 // The connect path emits the corresponding failure
                 // log; the supervisor adds a re-emit for cycles where
@@ -355,11 +355,17 @@ async fn run_one_cycle(
 ) -> Result<(), ClientError> {
     let logged_in = login(host, port, tls, user, password, account_id, ca_path).await?;
 
+    // Auth succeeded; clear any stale health (most importantly,
+    // AuthRejected from a prior bad-credential cycle that the operator
+    // has since fixed). Without this the field stays AuthRejected for
+    // the entire IDLE lifetime — which on a large mailbox is forever.
+    update_health(account_id, folder, sink, "active").await;
+
     let mut conn = Connection::new(account_id, folder);
 
     match logged_in {
         LoggedIn::Tls(mut client) => {
-            run_initial_backfill(&mut conn, &mut client, sink).await?;
+            run_initial_backfill(&mut conn, &mut client, sink, shutdown.clone()).await?;
             // Update watermark from initial backfill via sink state.
             // (We don't track via update_sync_state's last_seen_uid here;
             // instead we let run_idle_loop's return value advance it.)
@@ -369,7 +375,7 @@ async fn run_one_cycle(
             *last_seen_uid = new_uid;
         }
         LoggedIn::Plain(mut client) => {
-            run_initial_backfill(&mut conn, &mut client, sink).await?;
+            run_initial_backfill(&mut conn, &mut client, sink, shutdown.clone()).await?;
             let (_returned, new_uid) =
                 run_idle_loop(&mut conn, client, sink, *last_seen_uid, idle_recycle, shutdown)
                     .await?;
@@ -380,9 +386,9 @@ async fn run_one_cycle(
 }
 
 async fn update_health(
-    sink: &Arc<dyn MessageSink>,
     account_id: &str,
     folder: &str,
+    sink: &dyn MessageSink,
     health: &str,
 ) {
     let _ = sink

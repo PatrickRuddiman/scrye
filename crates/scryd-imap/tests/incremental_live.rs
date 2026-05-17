@@ -50,7 +50,8 @@ async fn run_incremental_fetches_only_new_uids_and_updates_watermark() {
     let sink = support::test_sink::CollectingSink::new();
     let mut conn = Connection::new("incremental-test", "INBOX");
 
-    run_initial_backfill(&mut conn, &mut client, &sink)
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    run_initial_backfill(&mut conn, &mut client, &sink, shutdown_rx)
         .await
         .expect("backfill");
 

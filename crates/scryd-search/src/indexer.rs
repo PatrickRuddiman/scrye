@@ -20,4 +20,12 @@ pub trait Indexer: Send + Sync {
     async fn remove(&self, id: &MessageId) -> Result<(), IndexError>;
     async fn truncate(&self) -> Result<(), IndexError>;
     async fn search(&self, query: &SearchQuery) -> Result<SearchResponse, SearchError>;
+
+    /// Flush any deferred indexing work (embedding, etc). Called by the
+    /// drainer after a non-empty batch so the expensive embed pass runs
+    /// in producer cadence rather than blocking the next `search` call.
+    /// Default no-op for indexers that do work synchronously in `submit`.
+    async fn flush_pending(&self) -> Result<(), IndexError> {
+        Ok(())
+    }
 }

@@ -50,7 +50,8 @@ async fn run_initial_backfill_submits_each_message_and_updates_state() {
     let sink = support::test_sink::CollectingSink::new();
     let mut conn = Connection::new("backfill-test", "INBOX");
 
-    run_initial_backfill(&mut conn, &mut client, &sink)
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    run_initial_backfill(&mut conn, &mut client, &sink, shutdown_rx)
         .await
         .expect("run_initial_backfill");
 
