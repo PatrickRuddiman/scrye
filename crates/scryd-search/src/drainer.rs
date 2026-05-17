@@ -77,7 +77,19 @@ impl Drainer {
                     }
                 }
                 Ok(_n) => {
-                    // We just made progress; loop again immediately.
+                    // We just made progress; ask the indexer to flush any
+                    // deferred work (witchcraft's embed/index pass) so the
+                    // expensive part runs in producer cadence rather than
+                    // blocking the next search call. No-op for indexers
+                    // that don't defer (e.g. InMemoryIndexer).
+                    if let Err(e) = self.indexer.flush_pending().await {
+                        warn!(
+                            target: "scryd_search::drainer",
+                            error = %e,
+                            "indexer flush_pending failed; continuing"
+                        );
+                    }
+                    // Loop again immediately to drain more rows if present.
                 }
                 Err(e) => {
                     warn!(target: "scryd_search::drainer", error = %e, "queue read failed; backing off");

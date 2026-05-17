@@ -11,10 +11,17 @@ use tokio::sync::watch;
 
 use crate::client::Client;
 use crate::fetch::run_incremental;
-use crate::sink::MessageSink;
+use crate::sink::{MessageSink, SyncStateUpdate};
 use crate::state::{ConnState, Connection};
 use crate::tombstone::{scan as tombstone_scan, TOMBSTONE_SCAN_EVERY};
 use crate::ClientError;
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// Cadence at which the IDLE channel is recycled. RFC 2177 recommends
 /// 29 minutes; we round down to 25 to give a safe margin against
@@ -131,6 +138,18 @@ where
             }
             IdleOutcome::Recycle => {
                 emit_idle_recycle(&conn.account_id, &conn.folder);
+                // Refresh the freshness timestamp so /status doesn't go
+                // stale on a quiet account that's just sitting in IDLE.
+                let _ = sink
+                    .update_sync_state(
+                        &conn.account_id,
+                        &conn.folder,
+                        SyncStateUpdate {
+                            last_full_sync_at: Some(now_unix()),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
             }
             IdleOutcome::Event => {
                 let new_uid =

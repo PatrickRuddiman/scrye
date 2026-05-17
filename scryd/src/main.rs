@@ -252,7 +252,7 @@ fn run_reindex() {
         match client.post("/internal/reindex").await {
             Ok(resp) if resp.status == 202 => {
                 println!("reindex started; search continues to serve during rebuild");
-                println!("check progress with: journalctl --user -u scryd");
+                println!("check progress with: journalctl -u scryd");
             }
             Ok(resp) if resp.status == 409 => {
                 println!("a reindex is already running");

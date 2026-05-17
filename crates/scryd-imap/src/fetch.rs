@@ -3,12 +3,20 @@
 //! and surfaces results as [`FetchedMessage`] values.
 
 use futures::{AsyncRead, AsyncWrite, StreamExt};
+use tokio::sync::watch;
 
 use crate::client::Client;
 use crate::sink::{FetchedMessage, MessageSink, SyncStateUpdate};
 use crate::state::{ConnState, Connection, INCREMENTAL_FETCH_BATCH};
 use crate::verbs::{assert_verb_allowed, ImapVerb};
 use crate::ClientError;
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// FETCH attribute list scryd issues for every batch — exhaustively
 /// read-only; `BODY.PEEK[]` returns the full RFC 5322 payload without
@@ -50,10 +58,16 @@ where
 /// message to the sink. Updates `sink.update_sync_state` after each
 /// batch so a SIGKILL mid-walk resumes from a recent watermark on
 /// the next start.
+///
+/// Checks `shutdown` between batches so the supervisor can exit
+/// within one batch-time of SIGTERM instead of running the entire
+/// backfill to completion (which on a 500k-message Gmail can take
+/// hours and bumps into systemd's `TimeoutStopUSec=90s` SIGKILL).
 pub async fn run_initial_backfill<S>(
     conn: &mut Connection,
     client: &mut Client<S>,
     sink: &dyn MessageSink,
+    shutdown: watch::Receiver<bool>,
 ) -> Result<(), ClientError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + std::fmt::Debug,
@@ -86,6 +100,12 @@ where
     let mut lo: u32 = 1;
     let mut max_uid_seen: u32 = 0;
     loop {
+        if *shutdown.borrow() {
+            // Caller is exiting; bail cleanly. Watermark is already
+            // persisted up to the most recent completed batch, so the
+            // next start resumes from there.
+            break;
+        }
         if let Some(t) = target {
             if t == 0 || lo > t {
                 break;
@@ -108,6 +128,7 @@ where
             SyncStateUpdate {
                 uidvalidity: Some(server_uidvalidity),
                 last_seen_uid: Some(max_uid_seen),
+                last_full_sync_at: Some(now_unix()),
                 ..Default::default()
             },
         )
@@ -156,18 +177,25 @@ where
         }
         sink.submit(fetched).await?;
     }
-    if max_uid_seen > last_seen_uid {
-        sink.update_sync_state(
-            &conn.account_id,
-            &conn.folder,
-            SyncStateUpdate {
-                uidvalidity: Some(server_uidvalidity),
-                last_seen_uid: Some(max_uid_seen),
-                ..Default::default()
+    // Always write last_full_sync_at — even an empty incremental fetch
+    // confirms the supervisor is alive and the channel is healthy.
+    // Operators reading /status need a freshness signal that doesn't
+    // require new mail to advance.
+    sink.update_sync_state(
+        &conn.account_id,
+        &conn.folder,
+        SyncStateUpdate {
+            uidvalidity: Some(server_uidvalidity),
+            last_seen_uid: if max_uid_seen > last_seen_uid {
+                Some(max_uid_seen)
+            } else {
+                None
             },
-        )
-        .await?;
-    }
+            last_full_sync_at: Some(now_unix()),
+            ..Default::default()
+        },
+    )
+    .await?;
     Ok(max_uid_seen)
 }
 

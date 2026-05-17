@@ -84,7 +84,7 @@ fn reindex_202_prints_started_message_and_exits_zero() {
         assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("reindex started"), "{stdout}");
-        assert!(stdout.contains("journalctl --user -u scryd"), "{stdout}");
+        assert!(stdout.contains("journalctl -u scryd"), "{stdout}");
     });
 }
 
