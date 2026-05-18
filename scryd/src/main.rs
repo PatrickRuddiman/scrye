@@ -122,6 +122,23 @@ fn main() {
         .install_default()
         .expect("install rustls aws-lc-rs crypto provider");
 
+    // Cap rayon's global thread pool to mirror the tokio worker
+    // cap below. candle (via witchcraft) uses rayon for its embed
+    // pass; default pool size is available_parallelism(), which
+    // pegs all cores during heavy backfill and starves the IMAP
+    // supervisor + UDS server. Install before any candle code
+    // runs — the global pool is set once and never resized.
+    // `build_global` returns Err if already installed; ignore so
+    // tests that link this binary multiple times still pass.
+    let rayon_workers = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .saturating_sub(2)
+        .max(1);
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(rayon_workers)
+        .build_global();
+
     let cli = Cli::parse();
     match cli.verb {
         Verb::Serve => run_serve(),

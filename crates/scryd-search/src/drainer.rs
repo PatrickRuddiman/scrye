@@ -23,6 +23,15 @@ pub const MAX_ATTEMPTS: u32 = 5;
 /// Number of queue rows the drainer pulls per loop iteration.
 pub const INDEXER_BATCH: usize = 32;
 
+/// Accumulated docs embedded since the last `flush_index` call
+/// before the drainer forces another cascade. Caps how stale
+/// clustering can get during a multi-hour backfill that never goes
+/// idle. With ~580 embeddings/doc on XTR multi-vector, 256 docs
+/// ≈ 150k embeddings — comfortably above witchcraft's L2 cascade
+/// threshold so each cascade we do trigger does meaningful work
+/// rather than churning L0 over and over.
+pub const INDEX_REBUILD_THRESHOLD: usize = 256;
+
 /// Idle poll cadence when the queue is empty and no enqueue notification has
 /// arrived. Bounded so the drainer wakes up periodically even if the
 /// notify-from-storage path is lost (test runtime, dev), but small enough to
@@ -63,6 +72,12 @@ impl Drainer {
 
     /// Drain forever. Returns when `shutdown_token().cancel()` is called.
     pub async fn run(self) {
+        // Counts docs the indexer has embedded since the last
+        // `flush_index` call. Crosses `INDEX_REBUILD_THRESHOLD` →
+        // we force a cascade even though the queue isn't idle, so
+        // a multi-hour backfill doesn't leave clustering arbitrarily
+        // far behind.
+        let mut embeds_since_last_index: usize = 0;
         loop {
             if self.shutdown.is_cancelled() {
                 return;
@@ -70,7 +85,16 @@ impl Drainer {
             let tick_started = Instant::now();
             match self.tick().await {
                 Ok(0) => {
-                    // Queue empty; wait for a notify, a poll timer, or shutdown.
+                    // Queue empty. Take this opportunity to run the
+                    // clustering cascade if we have any pending embed
+                    // work since the last one. `flush_index` is a
+                    // cheap no-op below witchcraft's L0_CAPACITY so
+                    // calling it on every idle transition is fine.
+                    if embeds_since_last_index > 0 {
+                        self.run_flush_index().await;
+                        embeds_since_last_index = 0;
+                    }
+                    // Then wait for a notify, a poll timer, or shutdown.
                     tokio::select! {
                         _ = self.notify.notified() => {}
                         _ = tokio::time::sleep(IDLE_POLL) => {}
@@ -85,24 +109,42 @@ impl Drainer {
                         elapsed_ms = tick_elapsed_ms,
                         "drained batch from index_queue"
                     );
-                    // Ask the indexer to flush any deferred work
-                    // (witchcraft's embed/index pass) so the expensive
-                    // part runs in producer cadence rather than blocking
-                    // the next search call. No-op for indexers that
-                    // don't defer (e.g. InMemoryIndexer).
-                    let flush_started = Instant::now();
-                    if let Err(e) = self.indexer.flush_pending().await {
-                        warn!(
-                            target: "scryd_search::drainer",
-                            error = %e,
-                            "indexer flush_pending failed; continuing"
-                        );
-                    } else {
-                        info!(
-                            target: "scryd_search::drainer",
-                            elapsed_ms = flush_started.elapsed().as_millis() as u64,
-                            "flush_pending completed"
-                        );
+                    // Embed in a bounded loop so each individual call
+                    // releases the indexer's state mutex (~20 s max
+                    // hold) before the next one. Caps at 8 rounds —
+                    // that's INDEXER_BATCH / FLUSH_EMBED_BATCH = 32/4
+                    // worth of catchup; if we still have more dirty
+                    // docs the next drainer iteration will keep going.
+                    for _ in 0..(INDEXER_BATCH / 4).max(1) {
+                        match self.indexer.flush_embeddings().await {
+                            Ok(0) => break,
+                            Ok(embedded) => {
+                                embeds_since_last_index =
+                                    embeds_since_last_index.saturating_add(embedded);
+                                info!(
+                                    target: "scryd_search::drainer",
+                                    embedded = embedded,
+                                    pending_for_index = embeds_since_last_index,
+                                    "flush_embeddings completed"
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    target: "scryd_search::drainer",
+                                    error = %e,
+                                    "flush_embeddings failed; continuing"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    // Only fire the (potentially expensive) clustering
+                    // cascade when enough work has piled up to amortize
+                    // it. The idle path above handles the steady-state
+                    // "eventually flush" case.
+                    if embeds_since_last_index >= INDEX_REBUILD_THRESHOLD {
+                        self.run_flush_index().await;
+                        embeds_since_last_index = 0;
                     }
                     // Loop again immediately to drain more rows if present.
                 }
@@ -113,6 +155,29 @@ impl Drainer {
                         _ = self.shutdown.cancelled() => return,
                     }
                 }
+            }
+        }
+    }
+
+    /// Run the indexer's cluster pass with timing + error logging.
+    /// Extracted so the idle and threshold paths share the same
+    /// reporting shape.
+    async fn run_flush_index(&self) {
+        let started = Instant::now();
+        match self.indexer.flush_index().await {
+            Ok(()) => {
+                info!(
+                    target: "scryd_search::drainer",
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "flush_index completed"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    target: "scryd_search::drainer",
+                    error = %e,
+                    "flush_index failed; continuing"
+                );
             }
         }
     }
