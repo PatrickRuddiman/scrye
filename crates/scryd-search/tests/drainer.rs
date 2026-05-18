@@ -5,6 +5,7 @@
 //! mentions is gated to the follow-up that wires up the production binding.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -41,6 +42,48 @@ impl<'a> MakeWriter<'a> for CaptureWriter {
     type Writer = CaptureWriter;
     fn make_writer(&'a self) -> Self::Writer {
         self.clone()
+    }
+}
+
+/// Indexer stub that wraps `InMemoryIndexer` and counts `flush_pending`
+/// invocations so we can assert the drainer is calling it after each
+/// non-empty tick. The witchcraft impl defers embedding to that call;
+/// regression here would re-introduce the v0.3.4 search-blocking
+/// behavior on a different indexer.
+struct CountingFlushStub {
+    inner: InMemoryIndexer,
+    flushes: AtomicUsize,
+}
+
+impl CountingFlushStub {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryIndexer::new(),
+            flushes: AtomicUsize::new(0),
+        }
+    }
+    fn flush_count(&self) -> usize {
+        self.flushes.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl Indexer for CountingFlushStub {
+    async fn submit(&self, submit: IndexSubmit) -> Result<(), IndexError> {
+        self.inner.submit(submit).await
+    }
+    async fn remove(&self, id: &MessageId) -> Result<(), IndexError> {
+        self.inner.remove(id).await
+    }
+    async fn truncate(&self) -> Result<(), IndexError> {
+        self.inner.truncate().await
+    }
+    async fn search(&self, query: &SearchQuery) -> Result<SearchResponse, SearchError> {
+        self.inner.search(query).await
+    }
+    async fn flush_pending(&self) -> Result<(), IndexError> {
+        self.flushes.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -233,6 +276,43 @@ async fn drainer_run_loop_processes_then_returns_on_shutdown() {
 fn constants_match_slice_decision_4() {
     assert_eq!(MAX_ATTEMPTS, 5);
     assert_eq!(INDEXER_BATCH, 32);
+}
+
+#[tokio::test]
+async fn drainer_calls_flush_pending_after_nonempty_tick() {
+    // Regression: v0.3.4 wired the drainer to call `flush_pending`
+    // after each non-empty `tick()` so embedding runs in producer
+    // cadence instead of blocking the next search. If that call
+    // ever gets removed (or the trait method renamed without
+    // updating the call site), this test fails — the witchcraft
+    // backend would silently stop embedding until the next search.
+    let (_d, storage) = fresh_storage().await;
+    let indexer = Arc::new(CountingFlushStub::new());
+
+    // One queued message → tick returns Ok(1), drainer's run loop
+    // takes the `n > 0` branch and calls flush_pending.
+    storage
+        .insert_message(sample("primary:flush@x", 1))
+        .await
+        .unwrap();
+    storage.enqueue("primary:flush@x").await.unwrap();
+
+    let drainer = Drainer::new(storage.clone(), indexer.clone());
+    let token = drainer.shutdown_token();
+    let notify = drainer.enqueue_notify();
+    let handle = tokio::spawn(drainer.run());
+
+    notify.notify_one();
+    // Give the run loop time to drain + flush + loop into idle.
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    token.cancel();
+    handle.await.unwrap();
+
+    assert!(
+        indexer.flush_count() >= 1,
+        "drainer must call flush_pending at least once after a non-empty tick (got {})",
+        indexer.flush_count()
+    );
 }
 
 #[tokio::test]

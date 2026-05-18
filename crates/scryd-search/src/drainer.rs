@@ -4,13 +4,13 @@
 //! when a row crosses the permanent-failure ceiling.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use scryd_log::{category, log_failure};
 use scryd_storage::{IndexQueueRow, StorageError, StorageHandle};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::document::build as build_document;
 use crate::indexer::Indexer;
@@ -67,6 +67,7 @@ impl Drainer {
             if self.shutdown.is_cancelled() {
                 return;
             }
+            let tick_started = Instant::now();
             match self.tick().await {
                 Ok(0) => {
                     // Queue empty; wait for a notify, a poll timer, or shutdown.
@@ -76,17 +77,31 @@ impl Drainer {
                         _ = self.shutdown.cancelled() => return,
                     }
                 }
-                Ok(_n) => {
-                    // We just made progress; ask the indexer to flush any
-                    // deferred work (witchcraft's embed/index pass) so the
-                    // expensive part runs in producer cadence rather than
-                    // blocking the next search call. No-op for indexers
-                    // that don't defer (e.g. InMemoryIndexer).
+                Ok(n) => {
+                    let tick_elapsed_ms = tick_started.elapsed().as_millis() as u64;
+                    info!(
+                        target: "scryd_search::drainer",
+                        batch = n,
+                        elapsed_ms = tick_elapsed_ms,
+                        "drained batch from index_queue"
+                    );
+                    // Ask the indexer to flush any deferred work
+                    // (witchcraft's embed/index pass) so the expensive
+                    // part runs in producer cadence rather than blocking
+                    // the next search call. No-op for indexers that
+                    // don't defer (e.g. InMemoryIndexer).
+                    let flush_started = Instant::now();
                     if let Err(e) = self.indexer.flush_pending().await {
                         warn!(
                             target: "scryd_search::drainer",
                             error = %e,
                             "indexer flush_pending failed; continuing"
+                        );
+                    } else {
+                        info!(
+                            target: "scryd_search::drainer",
+                            elapsed_ms = flush_started.elapsed().as_millis() as u64,
+                            "flush_pending completed"
                         );
                     }
                     // Loop again immediately to drain more rows if present.

@@ -38,6 +38,15 @@ use crate::{
 /// new scryd build still finds the same row for the same message_id.
 const SCRYD_NAMESPACE: Uuid = Uuid::from_u128(0xc092702c_5d38_4e2a_91d1_f16f8aa531b8);
 
+/// Maximum dirty docs witchcraft embeds per `flush_pending` call.
+/// Bounded so the state `Mutex` releases frequently enough that
+/// `submit()` and `search()` can preempt long-running embed passes.
+/// Picked so the worst-case mutex-hold ≈ FLUSH_EMBED_BATCH ×
+/// seconds-per-doc on CPU XTR — 4 keeps it inside ~15s, comfortably
+/// under the daemon-read timeout. v0.3.4 passed `None` (unbounded),
+/// which hung searches for hours on a 60k-message backlog.
+pub const FLUSH_EMBED_BATCH: usize = 4;
+
 fn message_id_to_uuid(id: &MessageId) -> Uuid {
     Uuid::new_v5(&SCRYD_NAMESPACE, id.as_str().as_bytes())
 }
@@ -93,7 +102,7 @@ fn flush_pending(state: &mut State) -> Result<(), IndexError> {
     if !state.dirty {
         return Ok(());
     }
-    let embedded = witchcraft::embed_chunks(&state.db, &state.embedder, None)
+    let embedded = witchcraft::embed_chunks(&state.db, &state.embedder, Some(FLUSH_EMBED_BATCH))
         .map_err(|e| IndexError::Upstream(format!("embed_chunks: {e}")))?;
     if embedded > 0 {
         witchcraft::index_chunks(&state.db, &state.device)
@@ -250,5 +259,19 @@ mod tests {
     fn parse_metadata_id_none_on_malformed() {
         assert_eq!(parse_metadata_id("not json").as_deref(), None);
         assert_eq!(parse_metadata_id(r#"{"other":"x"}"#).as_deref(), None);
+    }
+
+    #[test]
+    fn flush_embed_batch_stays_bounded() {
+        // v0.3.4 shipped with `None` (unbounded), which held the
+        // witchcraft Mutex across an entire dirty-pool flush — hung
+        // searches for hours on a 60k-message backlog. The bound
+        // protects against accidental regression to either `None`
+        // (caught by the call site) or a too-large limit.
+        assert!(FLUSH_EMBED_BATCH > 0, "must embed something per call");
+        assert!(
+            FLUSH_EMBED_BATCH <= 32,
+            "must stay small enough that one flush completes inside the daemon-read timeout"
+        );
     }
 }
