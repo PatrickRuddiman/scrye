@@ -18,6 +18,25 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// Decide what `last_seen_uid` value to write into `SyncStateUpdate`
+/// after a backfill batch. `SyncStateUpdate::last_seen_uid: None`
+/// preserves the existing stored watermark (see
+/// [`crate::sink::SyncStateUpdate`]); `Some(n)` overwrites it.
+///
+/// Empty early batches (e.g. Gmail's UID range starts well above 1)
+/// leave `max_uid_seen` at 0, which would otherwise clobber a
+/// healthy watermark from a previous session. Returning `None` in
+/// that case is the fix for the v0.3.4 bug where `/status` reported
+/// `last_seen_uid: 0` after restart despite a fully-indexed
+/// mailbox.
+pub(crate) fn last_seen_uid_update(max_uid_seen: u32) -> Option<u32> {
+    if max_uid_seen > 0 {
+        Some(max_uid_seen)
+    } else {
+        None
+    }
+}
+
 /// FETCH attribute list scryd issues for every batch — exhaustively
 /// read-only; `BODY.PEEK[]` returns the full RFC 5322 payload without
 /// setting the `\Seen` flag. Parenthesised because async-imap passes
@@ -127,7 +146,7 @@ where
             &conn.folder,
             SyncStateUpdate {
                 uidvalidity: Some(server_uidvalidity),
-                last_seen_uid: Some(max_uid_seen),
+                last_seen_uid: last_seen_uid_update(max_uid_seen),
                 last_full_sync_at: Some(now_unix()),
                 ..Default::default()
             },
@@ -223,4 +242,26 @@ fn parse_fetch_row(
         flags,
         raw_bytes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_seen_uid_update_preserves_existing_watermark_when_batch_is_empty() {
+        // Regression: v0.3.4 wrote Some(0) when an early backfill
+        // batch returned no messages (Gmail's lowest UID is well
+        // above 1, so the first dozens of batches fetch nothing).
+        // That overwrote a previously-persisted last_seen_uid with
+        // 0 on every restart.
+        assert_eq!(last_seen_uid_update(0), None);
+    }
+
+    #[test]
+    fn last_seen_uid_update_advances_when_batch_has_messages() {
+        assert_eq!(last_seen_uid_update(1), Some(1));
+        assert_eq!(last_seen_uid_update(89322), Some(89322));
+        assert_eq!(last_seen_uid_update(u32::MAX), Some(u32::MAX));
+    }
 }
