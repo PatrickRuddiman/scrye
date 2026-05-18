@@ -27,6 +27,12 @@ scryd-log = { path = "../crates/scryd-log" }
 # providers compiled in and refuses to auto-select — picking
 # explicitly here is the fix.
 rustls = { workspace = true }
+# Direct rayon dep so `main()` can cap the global pool to
+# (num_cpus − 2). candle (via witchcraft) pulls rayon transitively
+# and uses it for its embed pass; without an explicit cap, the
+# default pool size of `available_parallelism()` pegs all cores
+# during backfill and starves the IMAP supervisor + UDS server.
+rayon = "1"
 urlencoding = "2"
 is-terminal = "0.4"
 toml_edit = { workspace = true }

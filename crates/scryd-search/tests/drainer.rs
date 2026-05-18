@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use scryd_search::drainer::{Drainer, INDEXER_BATCH, MAX_ATTEMPTS};
+use scryd_search::drainer::{Drainer, INDEXER_BATCH, INDEX_REBUILD_THRESHOLD, MAX_ATTEMPTS};
 use scryd_search::indexer::Indexer;
 use scryd_search::{
     Hit, IndexError, IndexSubmit, InMemoryIndexer, MessageId, Mode, SearchError, SearchQuery,
@@ -45,32 +45,60 @@ impl<'a> MakeWriter<'a> for CaptureWriter {
     }
 }
 
-/// Indexer stub that wraps `InMemoryIndexer` and counts `flush_pending`
-/// invocations so we can assert the drainer is calling it after each
-/// non-empty tick. The witchcraft impl defers embedding to that call;
-/// regression here would re-introduce the v0.3.4 search-blocking
-/// behavior on a different indexer.
+/// Indexer stub that wraps `InMemoryIndexer` and counts the v0.3.6
+/// split flush operations. Mimics the witchcraft semantics:
+/// `submit` adds to a pending-embed pool; `flush_embeddings`
+/// drains up to a fixed slice each call and reports the count;
+/// `flush_index` runs the (here-fake) cluster pass.
+///
+/// The drainer's correctness contract is:
+/// - call `flush_embeddings` after every non-empty tick (so new
+///   docs become searchable),
+/// - call `flush_index` on idle if anything was embedded, or once
+///   accumulated embeds cross `INDEX_REBUILD_THRESHOLD`,
+/// - never call `flush_index` on a tick that did no embed work.
 struct CountingFlushStub {
     inner: InMemoryIndexer,
-    flushes: AtomicUsize,
+    flush_embeddings_calls: AtomicUsize,
+    flush_index_calls: AtomicUsize,
+    embedded_total: AtomicUsize,
+    pending_embed: AtomicUsize,
+    // Max docs `flush_embeddings` claims to embed per call. Mirrors
+    // FLUSH_EMBED_BATCH in the witchcraft binding (4).
+    embed_slice: usize,
 }
 
 impl CountingFlushStub {
     fn new() -> Self {
+        Self::with_embed_slice(4)
+    }
+    fn with_embed_slice(embed_slice: usize) -> Self {
         Self {
             inner: InMemoryIndexer::new(),
-            flushes: AtomicUsize::new(0),
+            flush_embeddings_calls: AtomicUsize::new(0),
+            flush_index_calls: AtomicUsize::new(0),
+            embedded_total: AtomicUsize::new(0),
+            pending_embed: AtomicUsize::new(0),
+            embed_slice,
         }
     }
-    fn flush_count(&self) -> usize {
-        self.flushes.load(Ordering::SeqCst)
+    fn flush_embeddings_count(&self) -> usize {
+        self.flush_embeddings_calls.load(Ordering::SeqCst)
+    }
+    fn flush_index_count(&self) -> usize {
+        self.flush_index_calls.load(Ordering::SeqCst)
+    }
+    fn embedded_total(&self) -> usize {
+        self.embedded_total.load(Ordering::SeqCst)
     }
 }
 
 #[async_trait]
 impl Indexer for CountingFlushStub {
     async fn submit(&self, submit: IndexSubmit) -> Result<(), IndexError> {
-        self.inner.submit(submit).await
+        self.inner.submit(submit).await?;
+        self.pending_embed.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
     async fn remove(&self, id: &MessageId) -> Result<(), IndexError> {
         self.inner.remove(id).await
@@ -81,8 +109,18 @@ impl Indexer for CountingFlushStub {
     async fn search(&self, query: &SearchQuery) -> Result<SearchResponse, SearchError> {
         self.inner.search(query).await
     }
-    async fn flush_pending(&self) -> Result<(), IndexError> {
-        self.flushes.fetch_add(1, Ordering::SeqCst);
+    async fn flush_embeddings(&self) -> Result<usize, IndexError> {
+        self.flush_embeddings_calls.fetch_add(1, Ordering::SeqCst);
+        let current = self.pending_embed.load(Ordering::SeqCst);
+        let to_embed = current.min(self.embed_slice);
+        if to_embed > 0 {
+            self.pending_embed.fetch_sub(to_embed, Ordering::SeqCst);
+            self.embedded_total.fetch_add(to_embed, Ordering::SeqCst);
+        }
+        Ok(to_embed)
+    }
+    async fn flush_index(&self) -> Result<(), IndexError> {
+        self.flush_index_calls.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -279,18 +317,14 @@ fn constants_match_slice_decision_4() {
 }
 
 #[tokio::test]
-async fn drainer_calls_flush_pending_after_nonempty_tick() {
-    // Regression: v0.3.4 wired the drainer to call `flush_pending`
-    // after each non-empty `tick()` so embedding runs in producer
-    // cadence instead of blocking the next search. If that call
-    // ever gets removed (or the trait method renamed without
-    // updating the call site), this test fails — the witchcraft
-    // backend would silently stop embedding until the next search.
+async fn drainer_calls_flush_embeddings_after_nonempty_tick() {
+    // v0.3.6 split flush_pending into flush_embeddings (per tick)
+    // and flush_index (on idle / threshold). Regression: if the
+    // per-tick embed call is removed, new docs would stop becoming
+    // searchable until the next idle window.
     let (_d, storage) = fresh_storage().await;
     let indexer = Arc::new(CountingFlushStub::new());
 
-    // One queued message → tick returns Ok(1), drainer's run loop
-    // takes the `n > 0` branch and calls flush_pending.
     storage
         .insert_message(sample("primary:flush@x", 1))
         .await
@@ -303,15 +337,104 @@ async fn drainer_calls_flush_pending_after_nonempty_tick() {
     let handle = tokio::spawn(drainer.run());
 
     notify.notify_one();
-    // Give the run loop time to drain + flush + loop into idle.
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     token.cancel();
     handle.await.unwrap();
 
     assert!(
-        indexer.flush_count() >= 1,
-        "drainer must call flush_pending at least once after a non-empty tick (got {})",
-        indexer.flush_count()
+        indexer.flush_embeddings_count() >= 1,
+        "drainer must call flush_embeddings at least once after a non-empty tick (got {})",
+        indexer.flush_embeddings_count()
+    );
+    assert_eq!(
+        indexer.embedded_total(),
+        1,
+        "the single submitted doc must have been embedded"
+    );
+}
+
+#[tokio::test]
+async fn drainer_calls_flush_index_on_idle_after_embeds() {
+    // v0.3.6: with the queue drained and at least one doc embedded
+    // since the last cluster pass, the idle transition fires
+    // flush_index exactly once before sleeping on notify.
+    let (_d, storage) = fresh_storage().await;
+    let indexer = Arc::new(CountingFlushStub::new());
+
+    storage
+        .insert_message(sample("primary:idle@x", 1))
+        .await
+        .unwrap();
+    storage.enqueue("primary:idle@x").await.unwrap();
+
+    let drainer = Drainer::new(storage.clone(), indexer.clone());
+    let token = drainer.shutdown_token();
+    let notify = drainer.enqueue_notify();
+    let handle = tokio::spawn(drainer.run());
+
+    notify.notify_one();
+    // Long enough for: drain tick, embed pass, idle tick fires
+    // flush_index, then we cancel.
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    token.cancel();
+    handle.await.unwrap();
+
+    assert_eq!(
+        indexer.flush_index_count(),
+        1,
+        "idle path should fire flush_index exactly once after embedding (got {})",
+        indexer.flush_index_count()
+    );
+}
+
+#[tokio::test]
+async fn drainer_does_not_call_flush_index_when_nothing_was_embedded() {
+    // Idle path is gated on `embeds_since_last_index > 0`, so an
+    // idle drainer that has done no embed work since the last
+    // cluster pass should NOT trigger a fresh flush_index. The
+    // witchcraft impl is internally threshold-gated anyway, but
+    // skipping the call entirely keeps the logs quieter and avoids
+    // the cost of taking the state mutex.
+    let (_d, storage) = fresh_storage().await;
+    let indexer = Arc::new(CountingFlushStub::new());
+
+    // Empty queue → tick returns Ok(0) immediately → idle branch
+    // sees embeds_since_last_index = 0 → no flush_index.
+    let drainer = Drainer::new(storage.clone(), indexer.clone());
+    let token = drainer.shutdown_token();
+    let handle = tokio::spawn(drainer.run());
+
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    token.cancel();
+    handle.await.unwrap();
+
+    assert_eq!(
+        indexer.flush_index_count(),
+        0,
+        "flush_index must not run when there's been no embed work (got {})",
+        indexer.flush_index_count()
+    );
+    assert_eq!(indexer.flush_embeddings_count(), 0);
+}
+
+#[test]
+fn index_rebuild_threshold_amortizes_cascade() {
+    // INDEX_REBUILD_THRESHOLD caps how stale clustering can get
+    // during a never-idle backfill. Constraint: it must span
+    // multiple INDEXER_BATCH drains so we don't trigger the
+    // cascade on near-every batch (the v0.3.5 bug), but also not
+    // be so high that backfills always rely on idle (a backfill
+    // that legitimately never idles needs *some* periodic
+    // cascade).
+    assert!(
+        INDEX_REBUILD_THRESHOLD >= INDEXER_BATCH * 4,
+        "threshold {INDEX_REBUILD_THRESHOLD} must span ≥4 drainer batches \
+         to amortize the cluster cascade"
+    );
+    assert!(
+        INDEX_REBUILD_THRESHOLD <= 1024,
+        "threshold {INDEX_REBUILD_THRESHOLD} too high — backfill would never \
+         trigger the threshold path before going idle"
     );
 }
 
