@@ -135,3 +135,86 @@ async fn remove_drops_a_single_message() {
         "msg-drop should not appear after remove"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires XTR_ASSETS env var pointing to T5 weights dir"]
+async fn multi_segment_doc_returns_single_hit_per_message() {
+    // v0.3.7: emails larger than SEGMENT_TARGET_CHARS produce multiple
+    // witchcraft documents under derived UUIDs. The search wrapper
+    // dedups by message_id so callers still see one hit per email.
+    let Some(assets) = assets_path() else {
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("witchcraft.sqlite");
+
+    let idx = WitchcraftIndexer::open(&db_path, &assets).await.unwrap();
+
+    // Build a long body that will split into ≥3 segments. Each segment
+    // mentions "uniqueneedle" so semantic search has multiple per-doc
+    // candidates and the dedup path is exercised.
+    let chunk = "uniqueneedle ".repeat(50) + &"a".repeat(2000) + "\n\n";
+    let big = chunk.repeat(4);
+    idx.submit(IndexSubmit {
+        message_id: MessageId::new("multi-seg"),
+        document: big,
+    })
+    .await
+    .expect("submit multi-segment doc");
+
+    let res = idx
+        .search(&SearchQuery {
+            q: "uniqueneedle".into(),
+            mode: Mode::FullText,
+            k: 10,
+            account_ids: Vec::new(),
+        })
+        .await
+        .expect("search");
+
+    let multi_seg_hits = res
+        .hits
+        .iter()
+        .filter(|h| h.message_id.as_str() == "multi-seg")
+        .count();
+    assert_eq!(
+        multi_seg_hits, 1,
+        "dedup must collapse multi-segment results into one hit per message_id"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires XTR_ASSETS env var pointing to T5 weights dir"]
+async fn remove_clears_all_segments_of_a_multi_segment_doc() {
+    let Some(assets) = assets_path() else {
+        return;
+    };
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("witchcraft.sqlite");
+
+    let idx = WitchcraftIndexer::open(&db_path, &assets).await.unwrap();
+    let big = "removeme ".repeat(50) + &"x".repeat(2000) + "\n\n";
+    let big = big.repeat(4);
+    idx.submit(IndexSubmit {
+        message_id: MessageId::new("multi-drop"),
+        document: big,
+    })
+    .await
+    .unwrap();
+
+    idx.remove(&MessageId::new("multi-drop")).await.unwrap();
+
+    let res = idx
+        .search(&SearchQuery {
+            q: "removeme".into(),
+            mode: Mode::FullText,
+            k: 10,
+            account_ids: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        !res.hits.iter().any(|h| h.message_id.as_str() == "multi-drop"),
+        "remove must drop every segment of a multi-segment doc"
+    );
+}

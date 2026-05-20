@@ -23,10 +23,17 @@
 //!         amortized.
 //!   - `MessageId` → witchcraft's required `Uuid` via `Uuid::new_v5` over
 //!     a fixed namespace + the id bytes. Deterministic, stable across
-//!     restarts.
-//!   - witchcraft's `metadata` JSON column carries `{"id":"<message_id>"}`
-//!     so the search path can map results back to scryd's stable id.
+//!     restarts. v0.3.7 splits one email across up to
+//!     [`crate::document::MAX_SEGMENTS_PER_MESSAGE`] witchcraft documents;
+//!     UUIDs derive from `(message_id, segment_idx)`. Segment 0 uses the
+//!     bare message_id derivation for backward compatibility with v0.3.6
+//!     stored rows.
+//!   - witchcraft's `metadata` JSON column carries
+//!     `{"id":"<message_id>","seg":<idx>,"of":<total>}` so the search
+//!     path can map results back to scryd's stable id and dedup multiple
+//!     hits from the same email.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +43,7 @@ use uuid::Uuid;
 
 use witchcraft::{DB, Embedder};
 
+use crate::document::{split_for_index, MAX_SEGMENTS_PER_MESSAGE};
 use crate::indexer::Indexer;
 use crate::{
     Hit, IndexError, IndexSubmit, MessageId, Mode, SearchError, SearchQuery, SearchResponse,
@@ -59,6 +67,18 @@ pub const FLUSH_EMBED_BATCH: usize = 4;
 
 fn message_id_to_uuid(id: &MessageId) -> Uuid {
     Uuid::new_v5(&SCRYD_NAMESPACE, id.as_str().as_bytes())
+}
+
+/// Witchcraft UUID for one segment of an email. Segment 0 matches the
+/// v0.3.6 single-doc derivation so existing stored rows stay valid
+/// after upgrade; segments ≥1 derive from `{message_id}#{idx}`.
+fn segment_uuid(id: &MessageId, idx: u32) -> Uuid {
+    if idx == 0 {
+        message_id_to_uuid(id)
+    } else {
+        let key = format!("{}#{}", id.as_str(), idx);
+        Uuid::new_v5(&SCRYD_NAMESPACE, key.as_bytes())
+    }
 }
 
 struct State {
@@ -147,13 +167,27 @@ impl Indexer for WitchcraftIndexer {
     async fn submit(&self, submit: IndexSubmit) -> Result<(), IndexError> {
         let state = self.state.clone();
         tokio::task::spawn_blocking(move || {
+            // v0.3.7: split one email across up to MAX_SEGMENTS_PER_MESSAGE
+            // witchcraft documents so each gets its own bounded
+            // Embedder::embed call. The single-doc model (v0.3.6) let one
+            // pathological email produce 319k embeddings in one chunk and
+            // freeze cascade for 138 minutes.
+            let segments = split_for_index(&submit.document);
+            let total = segments.len() as u32;
             let mut guard = state.lock().expect("witchcraft state mutex not poisoned");
-            let uuid = message_id_to_uuid(&submit.message_id);
-            let metadata = json!({ "id": submit.message_id.as_str() }).to_string();
-            guard
-                .db
-                .add_doc(&uuid, None, &metadata, &submit.document, None)
-                .map_err(|e| IndexError::Upstream(format!("add_doc: {e}")))?;
+            for (idx, segment_body) in segments.iter().enumerate() {
+                let uuid = segment_uuid(&submit.message_id, idx as u32);
+                let metadata = json!({
+                    "id": submit.message_id.as_str(),
+                    "seg": idx,
+                    "of": total,
+                })
+                .to_string();
+                guard
+                    .db
+                    .add_doc(&uuid, None, &metadata, segment_body, None)
+                    .map_err(|e| IndexError::Upstream(format!("add_doc: {e}")))?;
+            }
             guard.dirty = true;
             Ok::<(), IndexError>(())
         })
@@ -167,11 +201,16 @@ impl Indexer for WitchcraftIndexer {
         let id = id.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = state.lock().expect("witchcraft state mutex not poisoned");
-            let uuid = message_id_to_uuid(&id);
-            guard
-                .db
-                .remove_doc(&uuid)
-                .map_err(|e| IndexError::Upstream(format!("remove_doc: {e}")))?;
+            // Iterate up to MAX_SEGMENTS_PER_MESSAGE. witchcraft's
+            // remove_doc is a SQL DELETE — Ok with zero rows affected
+            // for indices that don't exist on this message.
+            for idx in 0..MAX_SEGMENTS_PER_MESSAGE as u32 {
+                let uuid = segment_uuid(&id, idx);
+                guard
+                    .db
+                    .remove_doc(&uuid)
+                    .map_err(|e| IndexError::Upstream(format!("remove_doc: {e}")))?;
+            }
             guard.dirty = true;
             Ok::<(), IndexError>(())
         })
@@ -220,6 +259,10 @@ impl Indexer for WitchcraftIndexer {
         let q = query.q.clone();
         let mode = query.mode;
         let k = query.k;
+        // v0.3.7: one email = up to MAX_SEGMENTS_PER_MESSAGE witchcraft
+        // documents. Ask witchcraft for k * MAX_SEGMENTS hits so we have
+        // enough candidates after dedup-by-message_id to return k.
+        let raw_k = k.saturating_mul(MAX_SEGMENTS_PER_MESSAGE).max(k);
         let response = tokio::task::spawn_blocking(move || {
             let mut guard = state.lock().expect("witchcraft state mutex not poisoned");
 
@@ -237,28 +280,48 @@ impl Indexer for WitchcraftIndexer {
                 cache,
                 &q,
                 /* threshold */ 0.0,
-                k,
+                raw_k,
                 use_fulltext,
                 /* sql_filter */ None,
             )
             .map_err(|e| SearchError::Upstream(format!("witchcraft::search: {e}")))?;
 
-            let hits = raw
-                .into_iter()
-                .filter_map(|(score, metadata, bodies, sub_idx, _date)| {
-                    let id = parse_metadata_id(&metadata)?;
-                    let semantic_snippet = if matches!(mode, Mode::Semantic | Mode::Hybrid) {
-                        bodies.get(sub_idx as usize).cloned()
-                    } else {
-                        None
-                    };
-                    Some(Hit {
-                        message_id: MessageId::new(id),
-                        score,
-                        semantic_snippet,
+            // Dedup: a multi-segment email produces up to
+            // MAX_SEGMENTS_PER_MESSAGE rows in `raw`. Collapse by
+            // message_id, keeping the highest-score segment plus its
+            // matching body snippet.
+            let mut best: HashMap<String, (f32, Option<String>)> = HashMap::new();
+            for (score, metadata, bodies, sub_idx, _date) in raw {
+                let Some(id) = parse_metadata_id(&metadata) else {
+                    continue;
+                };
+                let snippet = if matches!(mode, Mode::Semantic | Mode::Hybrid) {
+                    bodies.get(sub_idx as usize).cloned()
+                } else {
+                    None
+                };
+                best.entry(id)
+                    .and_modify(|cur| {
+                        if score > cur.0 {
+                            *cur = (score, snippet.clone());
+                        }
                     })
+                    .or_insert((score, snippet));
+            }
+            let mut hits: Vec<Hit> = best
+                .into_iter()
+                .map(|(id, (score, semantic_snippet))| Hit {
+                    message_id: MessageId::new(id),
+                    score,
+                    semantic_snippet,
                 })
                 .collect();
+            hits.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            hits.truncate(k);
             Ok::<SearchResponse, SearchError>(SearchResponse { hits })
         })
         .await
@@ -288,6 +351,37 @@ mod tests {
         let a = message_id_to_uuid(&MessageId::new("alice"));
         let b = message_id_to_uuid(&MessageId::new("bob"));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn segment_uuid_idx_zero_matches_legacy_derivation() {
+        // v0.3.6 stored docs at message_id_to_uuid(id). v0.3.7 keeps
+        // idx==0 on that same derivation so existing rows stay valid
+        // after upgrade.
+        let id = MessageId::new("legacy@example.com");
+        assert_eq!(segment_uuid(&id, 0), message_id_to_uuid(&id));
+    }
+
+    #[test]
+    fn segment_uuid_is_deterministic() {
+        let id = MessageId::new("alice@example.com");
+        assert_eq!(segment_uuid(&id, 0), segment_uuid(&id, 0));
+        assert_eq!(segment_uuid(&id, 5), segment_uuid(&id, 5));
+    }
+
+    #[test]
+    fn segment_uuid_distinguishes_segments_of_same_message() {
+        let id = MessageId::new("alice@example.com");
+        assert_ne!(segment_uuid(&id, 0), segment_uuid(&id, 1));
+        assert_ne!(segment_uuid(&id, 1), segment_uuid(&id, 2));
+    }
+
+    #[test]
+    fn segment_uuid_distinguishes_same_segment_of_different_messages() {
+        let a = MessageId::new("alice@example.com");
+        let b = MessageId::new("bob@example.com");
+        assert_ne!(segment_uuid(&a, 0), segment_uuid(&b, 0));
+        assert_ne!(segment_uuid(&a, 1), segment_uuid(&b, 1));
     }
 
     #[test]
