@@ -259,8 +259,10 @@ search` returns empty immediately after step 5 succeeds, wait or
 call `scryd reindex` to force a drain pass.
 
 For air-gapped or repo-pinned installs that don't depend on
-`/releases/latest`, substitute the literal release URL —
-e.g. `https://github.com/PatrickRuddiman/scrye/releases/download/v0.3.1/scryd-v0.3.1-x86_64-linux.tar.gz`.
+`/releases/latest`, substitute the literal release URL — e.g.
+`https://github.com/PatrickRuddiman/scrye/releases/download/v0.3.7/scryd-v0.3.7-x86_64-linux.tar.gz`
+(check the [Releases page](https://github.com/PatrickRuddiman/scrye/releases) for the
+current tag).
 
 ### Uninstall
 
