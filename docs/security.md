@@ -1,6 +1,6 @@
 # scryd security posture
 
-scryd v0.3.1 is a service. It ships **open by default** so it can be a clean cog in any consumer's indexing flow without reinventing OAuth, RBAC, or per-end-user account scope. This document spells out exactly what scryd defends against and what it doesn't, so the consumer can fill the gap.
+scryd is a service (v0.3.x service shape). It ships **open by default** so it can be a clean cog in any consumer's indexing flow without reinventing OAuth, RBAC, or per-end-user account scope. This document spells out exactly what scryd defends against and what it doesn't, so the consumer can fill the gap.
 
 ## What scryd defends against
 

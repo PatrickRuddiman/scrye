@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# System installer for scryd v0.3.1.
+# System installer for scryd.
 #
 # Lays out the FHS tree (/etc/scryd, /var/lib/scryd, /run/scryd),
 # creates a dedicated `scryd` system user, installs the systemd
 # unit + tmpfiles drop-in, fetches T5 weights, and enables the
 # system service.
 #
-# v0.3.1 is the service shape: install once per server, link N
+# v0.3.x is the service shape: install once per server, link N
 # IMAP accounts, expose an open search api tagged by account_id.
 # No per-operator install; no isolation between operator and
 # daemon UIDs (auth lives in the consumer's higher-layer api).
@@ -68,10 +68,10 @@ fi
 install -m 0755 "$SCRIPT_DIR/scryd" /usr/local/bin/scryd
 install -m 0755 "$SCRIPT_DIR/scryd-fetch-weights" /usr/local/bin/scryd-fetch-weights
 
-# Templates ship with no substitution placeholders in v0.3.1 — copy
-# them verbatim. The .in suffix is kept for backwards compatibility
-# with operators who may have scripts assuming the rendered-from-
-# template shape.
+# Templates ship with no substitution placeholders in the v0.3.x
+# service shape — copy them verbatim. The .in suffix is kept for
+# backwards compatibility with operators who may have scripts
+# assuming the rendered-from-template shape.
 install -m 0644 -o root -g root "$SCRIPT_DIR/scryd.service.in" /etc/systemd/system/scryd.service
 install -d -m 0755 /etc/tmpfiles.d
 install -m 0644 -o root -g root "$SCRIPT_DIR/scryd.tmpfiles.in" /etc/tmpfiles.d/scryd.conf
@@ -108,9 +108,15 @@ if [[ $SKIP_SYSTEMCTL -eq 0 ]]; then
     systemctl enable --now scryd
 fi
 
+# Report what was actually installed — `scryd --version` emits
+# `scryd <semver>`. Strip the binary name so the trailing message
+# never drifts from the bundled binary.
+INSTALLED_VERSION="$(/usr/local/bin/scryd --version 2>/dev/null | awk 'NR==1{print $2}')"
+INSTALLED_VERSION="${INSTALLED_VERSION:-unknown}"
+
 cat <<EOF
 
-scryd v0.3.1 installed.
+scryd v${INSTALLED_VERSION} installed.
 
 next steps:
   sudo scryd add-account

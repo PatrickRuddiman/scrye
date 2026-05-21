@@ -1,6 +1,6 @@
 # Installing scryd
 
-scryd v0.3.1 ships as a Linux system service. The installer creates a
+scryd ships as a Linux system service (v0.3.x service shape). The installer creates a
 dedicated `scryd` Linux user, installs the binary at
 `/usr/local/bin/scryd`, lays down the systemd unit, and (unless
 `--skip-weights` is passed) downloads the witchcraft asset bundle on
