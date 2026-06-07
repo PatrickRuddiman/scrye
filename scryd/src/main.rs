@@ -432,6 +432,7 @@ fn run_add_account(args: AddAccountArgs) {
         id: id.clone(),
         host,
         port,
+        tls: true,
         user,
         password,
         folders,
