@@ -5,6 +5,7 @@
 //! controlled shutdown.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use scryd_api::{bind, router as api_router, AppState};
 use scryd_config::Config;
@@ -14,6 +15,7 @@ use scryd_search::{Drainer, WitchcraftIndexer};
 use scryd_storage::StorageHandle;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tracing::warn;
 
 use crate::sink::StorageMessageSink;
 use crate::xdg::{assets_dir, config_path, data_dir, runtime_dir};
@@ -144,21 +146,79 @@ pub async fn serve_init() -> Result<ServeContext, RuntimeError> {
     })
 }
 
+/// Grace period for the API handler to finish in-flight requests after
+/// the shutdown signal is sent. UDS JSON requests are short round-trips;
+/// 5 s is generous and keeps the total maximum shutdown time well under
+/// systemd's `TimeoutStopSec=90s`.
+const SHUTDOWN_API_GRACE: Duration = Duration::from_secs(5);
+
+/// Grace period for IMAP supervisors to exit after the shutdown watch
+/// fires. Supervisors check the signal between backfill batches and in
+/// the IDLE select loop, so they exit within one batch-time. 40 s covers
+/// the worst-case single-batch on a large mailbox.
+const SHUTDOWN_SCHEDULER_GRACE: Duration = Duration::from_secs(40);
+
+/// Grace period for the drainer task to exit after its cancellation
+/// token fires. The drainer now checks the token before every
+/// flush_embeddings / flush_index call, so it exits within one
+/// in-flight spawn_blocking call's latency (≤ ~20 s). 30 s is a
+/// conservative ceiling for the case where an embed call was already
+/// dispatched before the cancel was observed.
+///
+/// Total maximum shutdown wall-time:
+///   SHUTDOWN_API_GRACE (5) + SHUTDOWN_SCHEDULER_GRACE (40)
+///   + SHUTDOWN_DRAINER_GRACE (30) = 75 s < 90 s.
+const SHUTDOWN_DRAINER_GRACE: Duration = Duration::from_secs(30);
+
 /// Wait for SIGTERM/SIGINT, then cooperatively tear down api router
-/// → scheduler → drainer → storage. Idempotent for the
-/// already-shut-down case.
+/// → scheduler → drainer → storage. Each phase has an explicit upper
+/// bound so the total shutdown wall-time stays under systemd's
+/// `TimeoutStopSec=90s` even under heavy indexing load (issue #13).
 pub async fn serve_run(ctx: ServeContext) -> Result<(), RuntimeError> {
     wait_for_shutdown_signal().await;
 
-    // Stop accepting new api connections and let in-flight ones
-    // drain.
+    // Phase 1 — stop accepting new API connections. In-flight UDS
+    // requests are small JSON round-trips; SHUTDOWN_API_GRACE is
+    // generous for them to drain.
     let _ = ctx.api_shutdown.send(true);
-    let _ = ctx.api_handle.await;
+    if tokio::time::timeout(SHUTDOWN_API_GRACE, ctx.api_handle)
+        .await
+        .is_err()
+    {
+        warn!(
+            target: "scryd_runtime::serve",
+            "api handler did not exit within grace period; proceeding"
+        );
+    }
 
-    let _ = ctx.scheduler.shutdown().await;
+    // Phase 2 — stop the IMAP scheduler. Supervisors check the
+    // shutdown watch between backfill batches and race it in the IDLE
+    // select, so they exit quickly; the timeout guards against a
+    // stalled or very-slow-backfilling session.
+    if tokio::time::timeout(SHUTDOWN_SCHEDULER_GRACE, ctx.scheduler.shutdown())
+        .await
+        .is_err()
+    {
+        warn!(
+            target: "scryd_runtime::serve",
+            "scheduler did not exit within grace period; proceeding"
+        );
+    }
 
+    // Phase 3 — stop the drainer. Cancel first so the loop exits as
+    // soon as the current in-flight operation finishes; the timeout
+    // guards against a flush_index cascade that started before the
+    // cancel was observed.
     ctx.drainer_shutdown.cancel();
-    let _ = ctx.drainer_handle.await;
+    if tokio::time::timeout(SHUTDOWN_DRAINER_GRACE, ctx.drainer_handle)
+        .await
+        .is_err()
+    {
+        warn!(
+            target: "scryd_runtime::serve",
+            "drainer did not exit within grace period; proceeding"
+        );
+    }
 
     log_lifecycle!(kind = kind::SHUTDOWN);
     Ok(())

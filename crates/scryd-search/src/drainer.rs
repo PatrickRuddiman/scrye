@@ -90,7 +90,7 @@ impl Drainer {
                     // work since the last one. `flush_index` is a
                     // cheap no-op below witchcraft's L0_CAPACITY so
                     // calling it on every idle transition is fine.
-                    if embeds_since_last_index > 0 {
+                    if embeds_since_last_index > 0 && !self.shutdown.is_cancelled() {
                         self.run_flush_index().await;
                         embeds_since_last_index = 0;
                     }
@@ -109,6 +109,18 @@ impl Drainer {
                         elapsed_ms = tick_elapsed_ms,
                         "drained batch from index_queue"
                     );
+                    // Guard: do not start the embed or index cascade
+                    // if shutdown was requested while the tick was
+                    // running. A flush_embeddings call holds the
+                    // witchcraft state mutex for up to ~20 s (4 docs ×
+                    // ~5 s/doc); flush_index can hold it for hundreds of
+                    // seconds on a large store. Skipping these on
+                    // shutdown means SIGTERM exits within one tick's
+                    // latency (fast DB inserts) rather than waiting for
+                    // a full flush pass to complete.
+                    if self.shutdown.is_cancelled() {
+                        return;
+                    }
                     // Embed in a bounded loop so each individual call
                     // releases the indexer's state mutex (~20 s max
                     // hold) before the next one. Caps at 8 rounds —
@@ -116,6 +128,13 @@ impl Drainer {
                     // worth of catchup; if we still have more dirty
                     // docs the next drainer iteration will keep going.
                     for _ in 0..(INDEXER_BATCH / 4).max(1) {
+                        // Re-check between embed iterations: each
+                        // flush_embeddings is a ~20 s spawn_blocking
+                        // call; exiting between rounds keeps the
+                        // shutdown path bounded to one call's latency.
+                        if self.shutdown.is_cancelled() {
+                            return;
+                        }
                         match self.indexer.flush_embeddings().await {
                             Ok(0) => break,
                             Ok(embedded) => {
@@ -142,7 +161,9 @@ impl Drainer {
                     // cascade when enough work has piled up to amortize
                     // it. The idle path above handles the steady-state
                     // "eventually flush" case.
-                    if embeds_since_last_index >= INDEX_REBUILD_THRESHOLD {
+                    if embeds_since_last_index >= INDEX_REBUILD_THRESHOLD
+                        && !self.shutdown.is_cancelled()
+                    {
                         self.run_flush_index().await;
                         embeds_since_last_index = 0;
                     }
