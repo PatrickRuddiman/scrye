@@ -5,6 +5,7 @@
 //! mentions is gated to the follow-up that wires up the production binding.
 
 use std::io::Write;
+use std::time::Duration;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -480,4 +481,154 @@ async fn unused_helpers_silence_compiler() {
         k: 0,
             account_ids: Vec::new(),
     };
+}
+
+/// Stub whose `flush_embeddings` and `flush_index` methods add a
+/// configurable async sleep per call. This simulates the production
+/// witchcraft backend where each `embed_chunks` call can hold the
+/// state `Mutex` for up to ~20 s. The drainer must respect its
+/// cancellation token *between* calls (not only before the entire
+/// pass) so that SIGTERM during heavy indexing doesn't wait for the
+/// full 8-round embed loop (or the hundreds-of-seconds index cascade)
+/// before exiting.
+///
+/// Regression guard for issue #13.
+struct SlowFlushStub {
+    inner: InMemoryIndexer,
+    flush_embeddings_calls: AtomicUsize,
+    flush_index_calls: AtomicUsize,
+    pending_embed: AtomicUsize,
+    /// Simulated latency per `flush_embeddings` / `flush_index` call.
+    sleep_ms: u64,
+}
+
+impl SlowFlushStub {
+    fn new(sleep_ms: u64) -> Self {
+        Self {
+            inner: InMemoryIndexer::new(),
+            flush_embeddings_calls: AtomicUsize::new(0),
+            flush_index_calls: AtomicUsize::new(0),
+            pending_embed: AtomicUsize::new(0),
+            sleep_ms,
+        }
+    }
+    fn flush_index_count(&self) -> usize {
+        self.flush_index_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl Indexer for SlowFlushStub {
+    async fn submit(&self, submit: IndexSubmit) -> Result<(), IndexError> {
+        self.inner.submit(submit).await?;
+        self.pending_embed.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    async fn remove(&self, id: &MessageId) -> Result<(), IndexError> {
+        self.inner.remove(id).await
+    }
+    async fn truncate(&self) -> Result<(), IndexError> {
+        self.inner.truncate().await
+    }
+    async fn search(&self, query: &SearchQuery) -> Result<SearchResponse, SearchError> {
+        self.inner.search(query).await
+    }
+    async fn flush_embeddings(&self) -> Result<usize, IndexError> {
+        self.flush_embeddings_calls.fetch_add(1, Ordering::SeqCst);
+        // Simulate the ~20 s mutex hold in production witchcraft.
+        tokio::time::sleep(Duration::from_millis(self.sleep_ms)).await;
+        let current = self.pending_embed.load(Ordering::SeqCst);
+        if current > 0 {
+            self.pending_embed.fetch_sub(1, Ordering::SeqCst);
+            return Ok(1);
+        }
+        Ok(0)
+    }
+    async fn flush_index(&self) -> Result<(), IndexError> {
+        self.flush_index_calls.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(self.sleep_ms)).await;
+        Ok(())
+    }
+}
+
+/// Regression test for issue #13.
+///
+/// Before the fix, the drainer only checked its cancellation token at
+/// the TOP of the outer loop — after each full tick. During heavy
+/// indexing that meant a SIGTERM was invisible until the entire
+/// `flush_embeddings` loop (up to 8 calls × ~20 s each in production)
+/// and the subsequent `flush_index` cascade (potentially hundreds of
+/// seconds) all finished, easily exceeding systemd's 90-second
+/// `TimeoutStopSec`.
+///
+/// After the fix the drainer checks the token:
+///   1. Before starting the `flush_embeddings` loop.
+///   2. Between every `flush_embeddings` iteration.
+///   3. Before calling `flush_index` in the threshold path.
+///
+/// This test uses a stub where each `flush_embeddings` call sleeps
+/// 300 ms (a gross under-estimate of production but enough to
+/// distinguish "exited after 1 call" from "exited after 8 calls").
+///
+/// Timeline with the fix:
+///   T=0    drainer starts, tick() completes (fast DB inserts)
+///   T≈0    flush_embeddings call 1 begins (300 ms sleep)
+///   T=50ms token.cancel() fires
+///   T=300ms flush_embeddings call 1 finishes; drainer checks token
+///            → sees cancelled → returns immediately
+///   Elapsed from cancel: ~250 ms  (≪ 2 s assertion)
+///
+/// Without the fix the drainer would run up to 8 calls (2400 ms) and
+/// then flush_index (another 300 ms) before checking the token at the
+/// TOP of the next outer-loop iteration.
+#[tokio::test]
+async fn drainer_exits_promptly_when_shutdown_cancelled_during_flush_embeddings() {
+    let (_d, storage) = fresh_storage().await;
+    // 300 ms per call — slow enough to distinguish 1 call from 8.
+    let indexer = Arc::new(SlowFlushStub::new(300));
+
+    storage
+        .insert_message(sample("primary:slow@x", 1))
+        .await
+        .unwrap();
+    storage.enqueue("primary:slow@x").await.unwrap();
+
+    let drainer = Drainer::new(storage.clone(), indexer.clone());
+    let token = drainer.shutdown_token();
+    let notify = drainer.enqueue_notify();
+    let handle = tokio::spawn(drainer.run());
+
+    notify.notify_one();
+    // 50 ms: long enough for tick() to complete (fast) and for the
+    // first flush_embeddings call to start but not finish.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let t_cancel = std::time::Instant::now();
+    token.cancel();
+
+    // With the fix: exits after at most one in-flight flush_embeddings
+    // call finishes (≤ 300 ms sleep + overhead). 2 s is a generous
+    // ceiling that would fail only if the old 8-call behaviour regressed.
+    tokio::time::timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("drainer must exit within 2 s of shutdown cancel (regression: issue #13)")
+        .expect("drainer task must not panic");
+
+    let elapsed = t_cancel.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(700),
+        "drainer took {:?} after shutdown cancel — \
+         expected < 700 ms (one flush_embeddings sleep + overhead); \
+         if this is ~2 400 ms the shutdown-check regression (issue #13) is back",
+        elapsed,
+    );
+
+    // flush_index should never be called: we submitted only 1 doc
+    // (well below INDEX_REBUILD_THRESHOLD=256) and shutdown cancelled
+    // before the queue went idle.
+    assert_eq!(
+        indexer.flush_index_count(),
+        0,
+        "flush_index must not be called after shutdown is signalled"
+    );
 }
