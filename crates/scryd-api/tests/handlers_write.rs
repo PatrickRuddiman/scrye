@@ -218,3 +218,42 @@ async fn seed_message(storage: &StorageHandle, id: &str, uid: u32) {
         .await
         .unwrap();
 }
+
+/// Verify that `POST /internal/reconcile` reloads config from disk when
+/// `AppState::config_path` is set. Without the fix for issue #9, the
+/// handler would read the stale in-memory config and miss the new account.
+#[tokio::test]
+async fn reconcile_picks_up_account_added_on_disk() {
+    // Start with an empty in-memory config (no accounts).
+    let (_d, mut state, _idx) = fresh_state(scryd_config::Config::default()).await;
+
+    // Write a config with one account to a temp file.  NamedTempFile
+    // creates with 0o600 mode (no world bits) so Config::load's
+    // permission check passes on Unix.
+    let mut cfg_file = NamedTempFile::new().unwrap();
+    cfg_file
+        .write_all(
+            br#"
+[[accounts]]
+id = "live"
+host = "imap.example.com"
+port = 993
+user = "alice@example.com"
+password = "secret"
+"#,
+        )
+        .unwrap();
+
+    // Point the state at the on-disk config.
+    state.config_path = Some(cfg_file.path().to_path_buf());
+
+    let (status, body) = post(state, "/internal/reconcile").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let v = parse_json(&body);
+    assert_eq!(v["started"], true);
+    // The handler must have reloaded from disk — "live" would be absent
+    // if it had read the empty startup config instead.
+    let added = v["accounts_added"].as_array().unwrap();
+    assert_eq!(added.len(), 1, "expected exactly one account added");
+    assert_eq!(added[0], "live");
+}
