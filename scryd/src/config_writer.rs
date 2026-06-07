@@ -14,6 +14,7 @@ pub struct AccountEntry {
     pub id: String,
     pub host: String,
     pub port: u16,
+    pub tls: bool,
     pub user: String,
     pub password: String,
     pub folders: Vec<String>,
@@ -184,6 +185,7 @@ fn upsert_into_doc(doc: &mut DocumentMut, entry: &AccountEntry) {
         t.insert("id", value(entry.id.as_str()));
         t.insert("host", value(entry.host.as_str()));
         t.insert("port", value(entry.port as i64));
+        t.insert("tls", value(entry.tls));
         t.insert("user", value(entry.user.as_str()));
         t.insert("password", value(entry.password.as_str()));
         t.insert("folders", folders_array(entry));
@@ -197,6 +199,11 @@ fn apply_entry_to_table(table: &mut Table, entry: &AccountEntry) {
     table["user"] = value(entry.user.as_str());
     table["password"] = value(entry.password.as_str());
     table["folders"] = folders_array(entry);
+    // Only insert tls if absent — preserve manual overrides (e.g. tls = false
+    // for local test IMAP fixtures) when rotating password or re-adding.
+    if table.get("tls").is_none() {
+        table.insert("tls", value(entry.tls));
+    }
 }
 
 fn folders_array(entry: &AccountEntry) -> Item {
