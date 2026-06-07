@@ -69,7 +69,12 @@ impl StorageHandle {
     /// `(account_id, folder, server_uid, uidvalidity)` already exists, only
     /// the body / size / raw-path fields are refreshed; thread_id and the
     /// account-scoped identity are preserved.
-    pub async fn insert_message(&self, m: MessageInsert) -> Result<(), StorageError> {
+    ///
+    /// Returns `true` when the message is new or its `body_md` changed,
+    /// meaning the caller should enqueue the message for (re-)indexing.
+    /// Returns `false` when the stored content is identical, so the sink can
+    /// skip an unnecessary re-enqueue during normal IMAP sync.
+    pub async fn insert_message(&self, m: MessageInsert) -> Result<bool, StorageError> {
         self.with_writer(move |conn| {
             let thread_id = threading::resolve_thread_id(
                 conn,
@@ -81,6 +86,26 @@ impl StorageHandle {
             let references_json = serde_json::to_string(&m.references)?;
             let to_json = serde_json::to_string(&m.recipients_to)?;
             let cc_json = serde_json::to_string(&m.recipients_cc)?;
+
+            // Check whether a row with identical coordinates AND identical
+            // body already exists.  If so, no re-indexing is needed.
+            let already_unchanged: bool = conn
+                .query_row(
+                    "SELECT 1 FROM messages \
+                     WHERE account_id = ?1 AND folder = ?2 \
+                       AND server_uid = ?3 AND uidvalidity = ?4 \
+                       AND body_md = ?5",
+                    params![
+                        m.account_id,
+                        m.folder,
+                        m.server_uid as i64,
+                        m.uidvalidity as i64,
+                        m.body_md,
+                    ],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
 
             conn.execute(
                 "INSERT INTO messages (\
@@ -114,7 +139,7 @@ impl StorageHandle {
                     m.size_bytes as i64,
                 ],
             )?;
-            Ok(())
+            Ok(!already_unchanged)
         })
         .await
     }
