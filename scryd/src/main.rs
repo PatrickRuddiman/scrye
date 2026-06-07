@@ -316,7 +316,7 @@ fn run_search(args: SearchArgs) {
         };
 
         let url = build_search_url(&args);
-        let resp = match client.get(&url).await {
+        let resp = match client.get_search(&url).await {
             Ok(r) => r,
             Err(uds_client::ClientError::DaemonNotRunning(_)) => bail(
                 ExitCode::DaemonNotRunning,
