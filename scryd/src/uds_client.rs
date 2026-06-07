@@ -11,7 +11,21 @@ use tokio::net::UnixStream;
 
 use crate::exit::ExitCode;
 
+/// Read budget for fast admin/status requests (connect-and-drain < 1 s
+/// normally, 30 s is already very generous).
 const READ_BUDGET: Duration = Duration::from_secs(30);
+
+/// Read budget for `scryd search`. Under an active indexing backlog
+/// witchcraft linearly scans all un-clustered embeddings before the
+/// index cascade runs, producing 80–130 s observed latencies on a
+/// 1,200-row queue (Standard_B4ms, 4 vCPU). 180 s gives ~50 % headroom
+/// above the 126 s pressure-test maximum while keeping the CLI from
+/// falsely declaring failure when the daemon is working correctly.
+///
+/// Status, accounts, message-raw, and all admin endpoints remain on the
+/// short [`READ_BUDGET`] so they stay responsive during backlog.
+const SEARCH_READ_BUDGET: Duration = Duration::from_secs(180);
+
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -77,14 +91,30 @@ impl UdsClient {
     }
 
     pub async fn get(&self, path: &str) -> Result<HttpResponse, ClientError> {
-        self.request("GET", path).await
+        self.request("GET", path, READ_BUDGET).await
+    }
+
+    /// Issue a GET with the extended read budget for `/search` endpoints.
+    ///
+    /// `witchcraft::search` holds the state mutex while linearly scanning
+    /// un-clustered embeddings; under a reindex backlog this legitimately
+    /// takes 80–130 s even though the daemon is making correct progress.
+    /// Callers that care about responsiveness (status, accounts, admin)
+    /// must use [`get`] instead so they stay fast.
+    pub async fn get_search(&self, path: &str) -> Result<HttpResponse, ClientError> {
+        self.request("GET", path, SEARCH_READ_BUDGET).await
     }
 
     pub async fn post(&self, path: &str) -> Result<HttpResponse, ClientError> {
-        self.request("POST", path).await
+        self.request("POST", path, READ_BUDGET).await
     }
 
-    async fn request(&self, method: &str, path: &str) -> Result<HttpResponse, ClientError> {
+    async fn request(
+        &self,
+        method: &str,
+        path: &str,
+        budget: Duration,
+    ) -> Result<HttpResponse, ClientError> {
         if !self.socket_path.exists() {
             return Err(ClientError::DaemonNotRunning(self.socket_path.clone()));
         }
@@ -105,7 +135,7 @@ impl UdsClient {
         stream.flush().await?;
 
         let mut buf = Vec::new();
-        let read = tokio::time::timeout(READ_BUDGET, async {
+        let read = tokio::time::timeout(budget, async {
             let mut chunk = [0u8; 8192];
             loop {
                 let n = stream.read(&mut chunk).await?;
