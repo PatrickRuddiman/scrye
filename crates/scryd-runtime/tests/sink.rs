@@ -194,3 +194,53 @@ async fn parsed_degraded_still_writes_a_row() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+#[tokio::test]
+async fn resubmit_unchanged_message_does_not_reenqueue() {
+    // Regression test for issue #12: normal IMAP sync re-fetches already-stored
+    // messages and must NOT push them back onto the index queue.  The queue
+    // would rebound after a partial drain and prevent reindex convergence.
+    let (_dir, storage, sink) = setup().await;
+
+    let fetched = FetchedMessage {
+        account_id: "primary".to_string(),
+        folder: "INBOX".to_string(),
+        server_uid: 42,
+        uidvalidity: 1,
+        internal_date: Some(1_700_000_000),
+        flags: vec![],
+        raw_bytes: FIXTURE.to_vec(),
+    };
+
+    // First submit — message is new, should be enqueued.
+    sink.submit(fetched.clone()).await.unwrap();
+    let after_first: i64 = storage
+        .with_reader(|c| {
+            c.query_row("SELECT COUNT(*) FROM index_queue", [], |r| r.get(0))
+                .map_err(Into::into)
+        })
+        .await
+        .unwrap();
+    assert_eq!(after_first, 1, "first submit should enqueue the message");
+
+    // Simulate the drainer consuming the entry.
+    let id: String = storage
+        .with_reader(|c| {
+            c.query_row("SELECT message_id FROM index_queue", [], |r| r.get(0))
+                .map_err(Into::into)
+        })
+        .await
+        .unwrap();
+    storage.delete_queue_row(&id).await.unwrap();
+
+    // Second submit with identical raw bytes (same body_md) — must not re-enqueue.
+    sink.submit(fetched).await.unwrap();
+    let after_second: i64 = storage
+        .with_reader(|c| {
+            c.query_row("SELECT COUNT(*) FROM index_queue", [], |r| r.get(0))
+                .map_err(Into::into)
+        })
+        .await
+        .unwrap();
+    assert_eq!(after_second, 0, "re-submit of unchanged message must not re-enqueue");
+}

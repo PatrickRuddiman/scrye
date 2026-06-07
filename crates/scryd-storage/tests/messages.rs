@@ -54,7 +54,8 @@ async fn insert_and_fetch_roundtrip() {
 
     let mut m = sample_insert("primary:abc@x", Some("abc@x"));
     m.server_uid = 100;
-    h.insert_message(m).await.unwrap();
+    let needs_indexing = h.insert_message(m).await.unwrap();
+    assert!(needs_indexing, "new message should signal indexing needed");
 
     let row = h.get_message("primary:abc@x").await.unwrap().unwrap();
     assert_eq!(row.account_id, "primary");
@@ -70,12 +71,14 @@ async fn reinsert_does_not_duplicate() {
 
     let mut m1 = sample_insert("primary:dup@x", Some("dup@x"));
     m1.server_uid = 7;
-    h.insert_message(m1).await.unwrap();
+    let first = h.insert_message(m1).await.unwrap();
+    assert!(first, "first insert should signal indexing needed");
 
     let mut m2 = sample_insert("primary:dup@x", Some("dup@x"));
     m2.server_uid = 7;
     m2.body_md = "updated body".to_string();
-    h.insert_message(m2).await.unwrap();
+    let changed = h.insert_message(m2).await.unwrap();
+    assert!(changed, "insert with changed body_md should signal indexing needed");
 
     // ON CONFLICT updates body_md.
     let row = h.get_message("primary:dup@x").await.unwrap().unwrap();
@@ -89,6 +92,24 @@ async fn reinsert_does_not_duplicate() {
         .await
         .unwrap();
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn reinsert_with_unchanged_content_returns_false() {
+    // The fix for #12: re-fetching an already-stored message with identical
+    // body must not signal re-indexing.  The sink uses this to skip
+    // enqueue, preventing queue rebound during live reindex.
+    let (_d, h) = handle();
+    seed_account(&h, "primary").await;
+
+    let mut m = sample_insert("primary:stable@x", Some("stable@x"));
+    m.server_uid = 5;
+    let first = h.insert_message(m.clone()).await.unwrap();
+    assert!(first, "first insert is always new");
+
+    // Identical re-insert (same coordinates, same body_md).
+    let second = h.insert_message(m).await.unwrap();
+    assert!(!second, "identical re-insert should not signal re-indexing");
 }
 
 #[tokio::test]

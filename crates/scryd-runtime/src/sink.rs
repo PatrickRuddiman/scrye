@@ -129,7 +129,7 @@ impl MessageSink for StorageMessageSink {
             size_bytes: fetched.raw_bytes.len() as u64,
         };
 
-        self.storage
+        let needs_indexing = self.storage
             .insert_message(insert)
             .await
             .map_err(map_storage_err)?;
@@ -138,11 +138,16 @@ impl MessageSink for StorageMessageSink {
         // we skip writes (the messages row is the search-relevant unit).
         let _ = attachments;
 
-        self.storage
-            .enqueue(&message_id)
-            .await
-            .map_err(map_storage_err)?;
-        self.drainer_notify.notify_one();
+        // Only enqueue when the message is new or its content changed.
+        // An idempotent re-fetch of an already-indexed message must not
+        // push it back onto the queue; that is the root cause of #12.
+        if needs_indexing {
+            self.storage
+                .enqueue(&message_id)
+                .await
+                .map_err(map_storage_err)?;
+            self.drainer_notify.notify_one();
+        }
 
         Ok(())
     }
