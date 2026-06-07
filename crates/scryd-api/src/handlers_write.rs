@@ -2,6 +2,7 @@
 //! the underlying action has *begun*; the work itself runs asynchronously
 //! in storage / search / scheduler tasks.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::extract::State;
@@ -118,12 +119,57 @@ struct ReconcileResultDto {
     accounts_inactivated: Vec<String>,
 }
 
-/// `POST /internal/reconcile` — re-mirror configured accounts into
-/// storage and signal the imap-sync scheduler to re-pick-up the new
-/// account set. v1 reads the in-memory `Config` from `AppState`;
-/// daemon-wide config-disk-reload is wired in by the cli's add-account
-/// flow, which writes config.toml then triggers this endpoint.
+/// `POST /internal/reconcile` — re-read config from disk (when the
+/// daemon knows its config path), mirror the updated account set into
+/// storage, and signal the imap-sync scheduler to reconcile its
+/// supervisor tree. This is the live-reload path triggered by the CLI's
+/// `add-account` / `remove-account` flow after writing `config.toml`.
 pub async fn handle_reconcile(State(state): State<AppState>) -> Response {
+    use scryd_config::Config;
+
+    // If the daemon has a config path on disk, reload it now so that
+    // changes written by the CLI are visible without a restart.
+    if let Some(ref path) = state.config_path {
+        let api_cfg = match Config::load(path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(
+                    path = %path.display(),
+                    err = %e,
+                    "reconcile: config reload from disk failed"
+                );
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "config_reload_failed",
+                    "failed to reload config from disk",
+                );
+            }
+        };
+        *state.config.write().await = api_cfg;
+
+        // Config doesn't impl Clone (password wraps SecretString), so
+        // load a second copy for the scheduler — same pattern used by
+        // serve_init which also loads the config twice.
+        if let Some(ref sched) = state.scheduler {
+            let sched_cfg = match Config::load(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(
+                        path = %path.display(),
+                        err = %e,
+                        "reconcile: scheduler config reload from disk failed"
+                    );
+                    return error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "config_reload_failed",
+                        "failed to reload config from disk",
+                    );
+                }
+            };
+            sched.update_config(Arc::new(sched_cfg));
+        }
+    }
+
     let config = state.config.read().await;
     let diff = match state.storage.reconcile_from_config(&config).await {
         Ok(d) => d,
@@ -136,6 +182,14 @@ pub async fn handle_reconcile(State(state): State<AppState>) -> Response {
         }
     };
     drop(config);
+
+    // Reconcile the scheduler's live supervisor set so newly-added
+    // accounts start being fetched immediately (fixes issue #9).
+    if let Some(ref sched) = state.scheduler {
+        if let Err(e) = sched.reconcile().await {
+            tracing::error!(err = %e, "reconcile: scheduler reconcile failed");
+        }
+    }
 
     (
         StatusCode::ACCEPTED,

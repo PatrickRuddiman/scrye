@@ -110,6 +110,7 @@ pub async fn serve_init() -> Result<ServeContext, RuntimeError> {
         indexer,
         api_config,
         Some(scheduler.clone()),
+        Some(cfg_path),
     );
     let router = api_router(app_state);
 

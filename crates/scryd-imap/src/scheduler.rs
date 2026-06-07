@@ -63,7 +63,7 @@ struct SupervisorHandle {
 }
 
 pub struct Scheduler {
-    config: Arc<Config>,
+    config: std::sync::RwLock<Arc<Config>>,
     sink: Arc<dyn MessageSink>,
     shutdown_tx: watch::Sender<bool>,
     shutdown_rx: watch::Receiver<bool>,
@@ -79,7 +79,7 @@ impl Scheduler {
     pub fn new(config: Arc<Config>, sink: Arc<dyn MessageSink>) -> Self {
         let (tx, rx) = watch::channel(false);
         Self {
-            config,
+            config: std::sync::RwLock::new(config),
             sink,
             shutdown_tx: tx,
             shutdown_rx: rx,
@@ -93,6 +93,14 @@ impl Scheduler {
     pub fn with_idle_recycle(mut self, idle_recycle: Duration) -> Self {
         self.idle_recycle = idle_recycle;
         self
+    }
+
+    /// Replace the config driving this scheduler's supervisor set.
+    /// Takes effect on the next `reconcile()` call; newly-spawned
+    /// supervisors pick it up immediately, existing supervisors use
+    /// their own `Arc<Config>` copy (refreshed on the next reconnect).
+    pub fn update_config(&self, config: Arc<Config>) {
+        *self.config.write().unwrap() = config;
     }
 
     /// Spawn one supervisor task per (account, folder) pair, bounded
@@ -168,8 +176,9 @@ impl Scheduler {
     }
 
     fn desired_keys(&self) -> std::collections::HashSet<(String, String)> {
+        let cfg = self.config.read().unwrap();
         let mut out = std::collections::HashSet::new();
-        for account in &self.config.accounts {
+        for account in &cfg.accounts {
             let folders: Vec<String> = account
                 .folders
                 .clone()
@@ -182,8 +191,11 @@ impl Scheduler {
     }
 
     fn spawn_diff_against_config(&self) {
+        // Acquire config read lock first, then handles — consistent ordering
+        // avoids deadlock with update_config (write lock, no handles lock).
+        let cfg = self.config.read().unwrap();
         let mut handles = self.handles.lock().unwrap();
-        for account in &self.config.accounts {
+        for account in &cfg.accounts {
             let folders: Vec<String> = account
                 .folders
                 .clone()
@@ -205,7 +217,7 @@ impl Scheduler {
                 let (exit_tx, exit_rx) = watch::channel(false);
                 let id = account.id.clone();
                 let folder_owned = folder.clone();
-                let config = self.config.clone();
+                let config = Arc::clone(&cfg);
                 let sink = self.sink.clone();
                 let shutdown_rx = self.shutdown_rx.clone();
                 let idle_recycle = self.idle_recycle;
