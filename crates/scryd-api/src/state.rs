@@ -35,11 +35,16 @@ pub struct AppState {
     /// scryd-runtime::serve); `None` in api-only tests where the
     /// scheduler isn't constructed.
     pub scheduler: Option<Arc<Scheduler>>,
+    /// On-disk config path. When `Some`, `POST /internal/reconcile`
+    /// reloads config from this path before reconciling so that CLI
+    /// mutations (add-account, remove-account) are picked up live.
+    /// `None` in api-only tests that manage `config` directly.
+    pub config_path: Option<std::path::PathBuf>,
 }
 
 impl AppState {
     pub fn new(storage: StorageHandle, indexer: Arc<dyn Indexer>, config: Config) -> Self {
-        Self::with_scheduler(storage, indexer, config, None)
+        Self::with_scheduler(storage, indexer, config, None, None)
     }
 
     pub fn with_scheduler(
@@ -47,6 +52,7 @@ impl AppState {
         indexer: Arc<dyn Indexer>,
         config: Config,
         scheduler: Option<Arc<Scheduler>>,
+        config_path: Option<std::path::PathBuf>,
     ) -> Self {
         let searcher = Arc::new(Searcher::new(indexer.clone()));
         Self {
@@ -57,6 +63,7 @@ impl AppState {
             config: Arc::new(RwLock::new(config)),
             started_at: Instant::now(),
             scheduler,
+            config_path,
         }
     }
 }
