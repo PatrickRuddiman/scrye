@@ -333,3 +333,101 @@ fn add_account_with_root_and_no_daemon_prints_start_hint() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("sudo systemctl start scryd"), "{stdout}");
 }
+
+#[test]
+fn add_account_writes_tls_true_field() {
+    // Regression test for issue #10: add-account must persist an explicit
+    // `tls = true` line so the daemon does not fall back to the serde
+    // default silently and so operators can inspect the config file and
+    // see the field is present.
+    let home = TempDir::new().unwrap();
+    let runtime = TempDir::new().unwrap();
+    let output = scryd()
+        .env("HOME", home.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env_remove("XDG_CONFIG_HOME")
+        .args([
+            "add-account",
+            "--account-id",
+            "smoke",
+            "--host",
+            "mail.example.com",
+            "--port",
+            "993",
+            "--user",
+            "smoke@example.com",
+            "--password-stdin",
+            "--folders",
+            "INBOX",
+        ])
+        .write_stdin("s3cr3t\n")
+        .output()
+        .expect("run scryd add-account");
+    assert!(
+        output.status.success(),
+        "expected exit 0; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let config_path = home.path().join(".config/scryd/config.toml");
+    let body = std::fs::read_to_string(&config_path).unwrap();
+    assert!(body.contains("tls = true"), "tls field missing from config: {body}");
+}
+
+#[test]
+fn add_account_inserts_tls_into_existing_config_without_tls() {
+    // When an existing config has an account entry without a `tls` key
+    // (written by an older version of scryd), a re-run of add-account
+    // for the same id should insert `tls = true` rather than leaving
+    // it absent.
+    let home = TempDir::new().unwrap();
+    let runtime = TempDir::new().unwrap();
+
+    let config_dir = home.path().join(".config/scryd");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let config_path = config_dir.join("config.toml");
+    // Simulate a config written by an old scryd that lacks the tls field.
+    std::fs::write(
+        &config_path,
+        r#"[[accounts]]
+id = "smoke"
+host = "mail.example.com"
+port = 993
+user = "smoke@example.com"
+password = "old"
+folders = ["INBOX"]
+"#,
+    )
+    .unwrap();
+
+    let output = scryd()
+        .env("HOME", home.path())
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .env_remove("XDG_CONFIG_HOME")
+        .args([
+            "add-account",
+            "--account-id",
+            "smoke",
+            "--host",
+            "mail.example.com",
+            "--user",
+            "smoke@example.com",
+            "--password-stdin",
+            "--folders",
+            "INBOX",
+        ])
+        .write_stdin("new-pass\n")
+        .output()
+        .expect("run scryd add-account");
+    assert!(
+        output.status.success(),
+        "expected exit 0; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let body = std::fs::read_to_string(&config_path).unwrap();
+    assert!(body.contains("tls = true"), "tls field not inserted on update: {body}");
+    assert!(body.contains("password = \"new-pass\""), "password not updated: {body}");
+    // Exactly one account block.
+    assert_eq!(body.matches("[[accounts]]").count(), 1, "duplicate block: {body}");
+}
