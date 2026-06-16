@@ -114,10 +114,21 @@ Secondary indexes on `messages`:
 
 - `message_id TEXT PRIMARY KEY`
 - `attempts INTEGER NOT NULL DEFAULT 0`
-- `last_error TEXT NULL`
+- `last_error TEXT NULL` — sanitized (single-line, control-chars stripped, length-bounded) by the drainer before storage so an upstream indexer error can't leak a message body / PII (issue #20).
+- `last_failed_at INTEGER NULL` — unix seconds of the most recent failed attempt (migration v2); powers `queue_health()`'s "most recent error" lookup and surfaces in `/status`.
 - `queued_at INTEGER NOT NULL`
 - `failed_permanent INTEGER NOT NULL DEFAULT 0`
 - Index `(failed_permanent, queued_at ASC)` for the drainer.
+
+`daemon_runs` table (migration v2 — durable crash inference, issue #20):
+
+- `run_id INTEGER PRIMARY KEY AUTOINCREMENT` — monotonic across the daemon's lifetime even after pruning; doubles as a restart counter surfaced as `/status.daemon.restart_count`.
+- `started_at INTEGER NOT NULL` — unix seconds at process start (`begin_run`).
+- `stopped_at INTEGER NULL` — unix seconds at graceful shutdown (`finish_run`); **NULL when the next process starts ⇒ the previous run aborted** (panic/SIGKILL/OOM).
+- `clean INTEGER NOT NULL DEFAULT 0` — set to 1 by `finish_run`.
+- `version TEXT NULL`, `pid INTEGER NULL` — build + process identity for triage.
+- Index `(started_at DESC)`.
+- Helpers: `begin_run(version, pid) -> DaemonRunStats { run_id, consecutive_unclean, last_crash_unix }` (counts the trailing unclean-shutdown streak, inserts the new run, prunes to the most recent ~200 rows) and `finish_run(run_id)`. `scryd-runtime::serve` uses `consecutive_unclean` to drive startup crash-loop backoff; `/status` surfaces the same numbers.
 
 Connection topology:
 
@@ -127,7 +138,7 @@ Connection topology:
 
 ## §5 Sequence
 
-1. **Daemon start.** Open `meta.sqlite` (write connection), `PRAGMA journal_mode=WAL`, `PRAGMA synchronous=NORMAL`, `PRAGMA foreign_keys=ON`. Run migrations: read `schema_version.version`, apply each migration > current in order, bump `schema_version`. On any migration error, log `configuration parse error` and exit non-zero — daemon does not open the IPC socket. After migrations, reconcile `accounts` from `$XDG_CONFIG_HOME/scryd/config.toml` (Decision 12). Open the read-pool. Hand control to imap-sync, search-engine, and api slices.
+1. **Daemon start.** Open `meta.sqlite` (write connection), `PRAGMA journal_mode=WAL`, `PRAGMA synchronous=NORMAL`, `PRAGMA foreign_keys=ON`. Run migrations: read `schema_version.version`, apply each migration > current in order, bump `schema_version`. On any migration error, log `configuration parse error` and exit non-zero — daemon does not open the IPC socket. After migrations, call `begin_run` to record this process in `daemon_runs` (and read the preceding crash streak that drives runtime crash-loop backoff). Then reconcile `accounts` from `$XDG_CONFIG_HOME/scryd/config.toml` (Decision 12). Open the read-pool. Hand control to imap-sync, search-engine, and api slices. On graceful shutdown, `finish_run` marks the run clean.
 2. **Message insert (sync worker).** IMAP sync slice fetches a message → mime-and-markdown slice produces `body_md` and attachment metadata → storage receives a message struct → BEGIN → `INSERT … ON CONFLICT … DO UPDATE` into `messages` (Decision 7) → `INSERT OR IGNORE` into `attachments` for each attachment metadata entry → write raw `.eml` bytes to `raw/<account>/<yyyy>/<mm>/<sha256-hex>.eml` mode `0600` (using a `.tmp` rename for atomicity) → run thread-resolution (Decision 8) and update `messages.thread_id` if it was minted as new → `INSERT OR IGNORE` into `index_queue` → COMMIT → notify the indexer task.
 3. **Sync state update.** After processing a (account, folder) batch, imap-sync calls a storage update: `UPDATE sync_state SET last_seen_uid=?, last_full_sync_at=?, account_health=?, last_error=?, backoff_until=? WHERE account_id=? AND folder=?`.
 4. **Tombstone.** When sync detects a UID disappeared (FETCH returned nothing for a UID we have): `UPDATE messages SET tombstoned_at=? WHERE message_id=?`. The indexer task's tombstone-remove handler is signaled; raw file is left on disk.

@@ -115,3 +115,33 @@ async fn pop_batch_respects_limit() {
     let batch = h.pop_batch(2).await.unwrap();
     assert_eq!(batch.len(), 2);
 }
+
+#[tokio::test]
+async fn queue_health_reports_depth_failed_and_last_error() {
+    let (_d, h) = handle();
+    // Two drainable rows, one that we drive to permanent failure.
+    h.enqueue("primary:ok1@x").await.unwrap();
+    h.enqueue("primary:ok2@x").await.unwrap();
+    h.enqueue("primary:bad@x").await.unwrap();
+
+    // Empty queue has no last_error.
+    let empty = {
+        let (_d2, h2) = handle();
+        h2.queue_health().await.unwrap()
+    };
+    assert_eq!(empty.depth, 0);
+    assert_eq!(empty.failed_permanent, 0);
+    assert!(empty.last_error.is_none());
+
+    // Drive primary:bad@x over the ceiling (max_attempts = 2).
+    assert!(!h.mark_failed("primary:bad@x", "boom one", 2).await.unwrap());
+    assert!(h.mark_failed("primary:bad@x", "boom two", 2).await.unwrap());
+
+    let health = h.queue_health().await.unwrap();
+    assert_eq!(health.depth, 2, "two non-failed rows remain drainable");
+    assert_eq!(health.failed_permanent, 1);
+    let last = health.last_error.expect("a failure was recorded");
+    assert_eq!(last.message_id, "primary:bad@x");
+    assert_eq!(last.error, "boom two");
+    assert_eq!(last.attempts, 2);
+}

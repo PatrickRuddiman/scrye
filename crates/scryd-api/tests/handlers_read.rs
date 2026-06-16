@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
-use scryd_api::{router, AppState};
+use scryd_api::{router, AppState, DaemonHealthSnapshot};
 use scryd_search::{InMemoryIndexer, Indexer, IndexSubmit, MessageId};
 use scryd_storage::{Address, MessageInsert, StorageHandle};
 use tempfile::TempDir;
@@ -269,4 +269,76 @@ async fn search_with_empty_query_returns_results_too() {
     // The InMemoryIndexer returns all docs for an empty query.
     let hits = v["hits"].as_array().unwrap();
     assert!(!hits.is_empty());
+}
+
+#[tokio::test]
+async fn status_reports_healthy_defaults_and_drainer_shape() {
+    let (_d, state) = setup().await;
+    let (status, body, _) = request(state, "/status").await;
+    assert_eq!(status, StatusCode::OK);
+    let v = parse_json(&body);
+
+    // Default snapshot is healthy.
+    assert_eq!(v["ok"], true);
+
+    // Drainer object is always present. setup() indexes directly (never
+    // enqueues) so the queue is empty and there is no last error.
+    assert_eq!(v["drainer"]["queue_depth"], 0);
+    assert_eq!(v["drainer"]["failed_permanent"], 0);
+    assert!(v["drainer"]["last_index_error"].is_null());
+
+    // Daemon object defaults to a clean first run.
+    assert_eq!(v["daemon"]["restart_count"], 0);
+    assert_eq!(v["daemon"]["consecutive_crashes"], 0);
+    assert!(v["daemon"]["last_crash_unix"].is_null());
+    assert_eq!(v["daemon"]["in_crash_loop"], false);
+    assert_eq!(v["daemon"]["in_backoff"], false);
+    assert!(v["daemon"]["backoff_until_unix"].is_null());
+}
+
+#[tokio::test]
+async fn status_reflects_crash_loop_when_flagged() {
+    let (_d, mut state) = setup().await;
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    state.daemon_health = DaemonHealthSnapshot {
+        restart_count: 42,
+        consecutive_crashes: 5,
+        last_crash_unix: Some(now_unix - 3),
+        in_crash_loop: true,
+        backoff_until_unix: Some(now_unix + 600),
+    };
+
+    let (status, body, _) = request(state, "/status").await;
+    assert_eq!(status, StatusCode::OK);
+    let v = parse_json(&body);
+
+    // A daemon in a crash loop reports unhealthy even on an up window.
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["daemon"]["restart_count"], 42);
+    assert_eq!(v["daemon"]["consecutive_crashes"], 5);
+    assert_eq!(v["daemon"]["last_crash_unix"], now_unix - 3);
+    assert_eq!(v["daemon"]["in_crash_loop"], true);
+    // backoff_until is in the future, so we are still backing off.
+    assert_eq!(v["daemon"]["in_backoff"], true);
+    assert_eq!(v["daemon"]["backoff_until_unix"], now_unix + 600);
+}
+
+#[tokio::test]
+async fn status_drainer_reports_queue_depth() {
+    let (_d, state) = setup().await;
+    // Enqueue the seeded message so the drainer queue is non-empty.
+    state
+        .storage
+        .enqueue("primary:fixture@example.com")
+        .await
+        .unwrap();
+
+    let (status, body, _) = request(state, "/status").await;
+    assert_eq!(status, StatusCode::OK);
+    let v = parse_json(&body);
+    assert_eq!(v["drainer"]["queue_depth"], 1);
+    assert_eq!(v["drainer"]["failed_permanent"], 0);
 }

@@ -2,6 +2,7 @@
 //! read/write helpers.
 
 pub mod accounts;
+pub mod daemon;
 pub mod db;
 pub mod handle;
 pub mod messages;
@@ -13,10 +14,11 @@ pub mod sync_state;
 pub mod threading;
 
 pub use accounts::AccountRow;
+pub use daemon::DaemonRunStats;
 pub use db::{open, open_read_only, StorageError};
 pub use handle::StorageHandle;
 pub use messages::{Address, MessageInsert, MessageRow};
-pub use queue::IndexQueueRow;
+pub use queue::{IndexQueueRow, QueueHealth, QueueLastError};
 pub use migrations::MigrationError;
 pub use reconcile::ReconcileDiff;
 pub use sync_state::{AccountHealth, SyncStateRow, SyncStateUpdate};

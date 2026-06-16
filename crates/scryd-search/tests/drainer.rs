@@ -159,6 +159,28 @@ impl Indexer for FailingStub {
     }
 }
 
+/// Always fails `submit` with a multi-line, control-char-laden error so tests
+/// can assert the drainer sanitizes it before persistence/logging.
+struct MultilineErrorStub;
+
+#[async_trait]
+impl Indexer for MultilineErrorStub {
+    async fn submit(&self, _submit: IndexSubmit) -> Result<(), IndexError> {
+        Err(IndexError::Upstream(
+            "embed_chunks failed:\n  panic at line 7\r\n\tbody=secret text".to_string(),
+        ))
+    }
+    async fn remove(&self, _id: &MessageId) -> Result<(), IndexError> {
+        Ok(())
+    }
+    async fn truncate(&self) -> Result<(), IndexError> {
+        Ok(())
+    }
+    async fn search(&self, _query: &SearchQuery) -> Result<SearchResponse, SearchError> {
+        Ok(SearchResponse { hits: Vec::new() })
+    }
+}
+
 async fn fresh_storage() -> (TempDir, StorageHandle) {
     let dir = TempDir::new().unwrap();
     let h = StorageHandle::open(dir.path(), 1).expect("open");
@@ -267,6 +289,35 @@ async fn drainer_marks_permanently_failed_after_max_attempts_and_emits_log() {
         "expected exactly one FT indexer failure log line, got {captured}"
     );
     assert!(lines[0].contains("\"message_id\":\"primary:flaky@x\""));
+}
+
+#[tokio::test]
+async fn drainer_persists_sanitized_single_line_error() {
+    let (_d, storage) = fresh_storage().await;
+    let stub: Arc<dyn Indexer> = Arc::new(MultilineErrorStub);
+    storage.insert_message(sample("primary:msg@x", 9)).await.unwrap();
+    storage.enqueue("primary:msg@x").await.unwrap();
+
+    let drainer = Drainer::new(storage.clone(), stub);
+    let n = drainer.tick().await.unwrap();
+    assert_eq!(n, 1);
+
+    let queue = storage.list_queue().await.unwrap();
+    assert_eq!(queue.len(), 1);
+    let stored = queue[0]
+        .last_error
+        .as_deref()
+        .expect("failed row must record last_error");
+
+    // The raw indexer error has newlines, a carriage return, and a tab; the
+    // stored value must be collapsed to a single line with no control chars.
+    assert!(!stored.contains('\n'), "stored error must be single-line: {stored:?}");
+    assert!(!stored.contains('\r'), "stored error must drop CR: {stored:?}");
+    assert!(!stored.contains('\t'), "stored error must drop tabs: {stored:?}");
+    assert_eq!(
+        stored,
+        "upstream witchcraft error: embed_chunks failed: panic at line 7 body=secret text"
+    );
 }
 
 #[tokio::test]

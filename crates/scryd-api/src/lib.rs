@@ -30,4 +30,4 @@ pub use peercred::{check_peer_uid, extract_peer_uid};
 pub use router::router;
 pub use serve::serve;
 pub use socket::bind;
-pub use state::AppState;
+pub use state::{AppState, DaemonHealthSnapshot};

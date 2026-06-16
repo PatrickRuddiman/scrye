@@ -18,6 +18,24 @@ pub struct ReindexHandle {
     pub messages_count: u64,
 }
 
+/// Crash-loop health computed once at daemon start (scryd-runtime::serve) and
+/// surfaced read-only through `GET /status`. Defaults to a healthy snapshot so
+/// api-only tests and the first clean boot report `ok`. `Copy` so handlers can
+/// cheaply read it out of the cloned [`AppState`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DaemonHealthSnapshot {
+    /// Monotonic lifetime restart counter (`daemon_runs.run_id` of this run).
+    pub restart_count: i64,
+    /// Consecutive preceding runs that died without a clean shutdown.
+    pub consecutive_crashes: u32,
+    /// `started_at` of the most recent unclean run, if any.
+    pub last_crash_unix: Option<i64>,
+    /// True when startup detected a crash loop and applied backoff.
+    pub in_crash_loop: bool,
+    /// Unix time the startup backoff sleep was scheduled to end, if any.
+    pub backoff_until_unix: Option<i64>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub storage: StorageHandle,
@@ -35,6 +53,9 @@ pub struct AppState {
     /// scryd-runtime::serve); `None` in api-only tests where the
     /// scheduler isn't constructed.
     pub scheduler: Option<Arc<Scheduler>>,
+    /// Crash-loop health captured at boot. `scryd-runtime::serve` overwrites
+    /// this before serving; defaulted (healthy) everywhere else.
+    pub daemon_health: DaemonHealthSnapshot,
 }
 
 impl AppState {
@@ -57,6 +78,7 @@ impl AppState {
             config: Arc::new(RwLock::new(config)),
             started_at: Instant::now(),
             scheduler,
+            daemon_health: DaemonHealthSnapshot::default(),
         }
     }
 }

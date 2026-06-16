@@ -8,6 +8,15 @@ Type=simple
 User=scryd
 Group=scryd
 ExecStart=/usr/local/bin/scryd serve
+# Restart on crash. scryd also rate-limits its own crash loops in-process:
+# it records each run in meta.sqlite (daemon_runs) and, once it sees
+# CRASH_LOOP_THRESHOLD consecutive unclean shutdowns within ~10min, sleeps with
+# capped exponential backoff at startup before reopening the indexer. That keeps
+# a restart storm from burning CPU while leaving the daemon up so `scryd status`
+# (and GET /status, ok=false during a loop) stay honest. We deliberately do NOT
+# set StartLimitIntervalSec/StartLimitBurst here: parking the unit would hide the
+# crash-loop signal that /status is meant to surface. Tune those only if you
+# prefer systemd to stop restarting a persistently broken install.
 Restart=on-failure
 RestartSec=5
 

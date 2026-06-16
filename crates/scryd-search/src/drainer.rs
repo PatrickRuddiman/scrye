@@ -10,7 +10,7 @@ use scryd_log::{category, log_failure};
 use scryd_storage::{IndexQueueRow, StorageError, StorageHandle};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::document::build as build_document;
 use crate::indexer::Indexer;
@@ -238,7 +238,11 @@ impl Drainer {
                 }
             }
             Err(err) => {
-                let err_str = err.to_string();
+                // Upstream indexer errors can embed document text; sanitize
+                // before it reaches `index_queue.last_error` or the journal so
+                // a message body / PII can't leak. The message_id stays as the
+                // stable, safe-to-log item identifier.
+                let err_str = sanitize_error(&err.to_string());
                 let permanent = self
                     .storage
                     .mark_failed(&id, &err_str, MAX_ATTEMPTS)
@@ -251,6 +255,13 @@ impl Drainer {
                         category = cat,
                         message_id = %id,
                         error = %err_str
+                    );
+                } else {
+                    debug!(
+                        target: "scryd_search::drainer",
+                        message_id = %id,
+                        error = %err_str,
+                        "index attempt failed; will retry"
                     );
                 }
             }
@@ -275,4 +286,72 @@ fn is_semantic_only(_err: &IndexError) -> bool {
     // No error variant flags the embedding pipeline specifically in v1.
     // When the witchcraft binding lands, match against that variant here.
     false
+}
+
+/// Maximum characters of an upstream indexer error we persist or log. Upstream
+/// errors can embed arbitrary document text; capping bounds both the stored
+/// `index_queue.last_error` and the journal line.
+const MAX_ERROR_LEN: usize = 200;
+
+/// Collapse an indexer error into a single bounded line safe to persist and
+/// log: runs of whitespace (including newlines) become one space, other control
+/// characters are dropped, and the result is truncated to [`MAX_ERROR_LEN`]
+/// characters with an ellipsis. Only the free-form error text is sanitized; the
+/// queue row's `message_id` remains the stable item identifier callers log.
+fn sanitize_error(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().min(MAX_ERROR_LEN + 1));
+    let mut prev_space = false;
+    for ch in raw.chars() {
+        if ch.is_whitespace() {
+            if !prev_space && !out.is_empty() {
+                out.push(' ');
+                prev_space = true;
+            }
+            continue;
+        }
+        if ch.is_control() {
+            continue;
+        }
+        out.push(ch);
+        prev_space = false;
+    }
+    let trimmed = out.trim_end();
+    if trimmed.chars().count() > MAX_ERROR_LEN {
+        let truncated: String = trimmed.chars().take(MAX_ERROR_LEN).collect();
+        format!("{truncated}…")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_error;
+
+    #[test]
+    fn collapses_newlines_and_whitespace_to_single_spaces() {
+        let got = sanitize_error("embed_chunks:\n  failed   on\tdoc\r\nbody");
+        assert_eq!(got, "embed_chunks: failed on doc body");
+        assert!(!got.contains('\n'));
+        assert!(!got.contains('\t'));
+    }
+
+    #[test]
+    fn strips_control_characters() {
+        let got = sanitize_error("oops\u{0007}\u{0000}done");
+        assert_eq!(got, "oopsdone");
+    }
+
+    #[test]
+    fn truncates_overlong_input_with_ellipsis() {
+        let raw = "x".repeat(500);
+        let got = sanitize_error(&raw);
+        assert_eq!(got.chars().count(), super::MAX_ERROR_LEN + 1);
+        assert!(got.ends_with('…'));
+    }
+
+    #[test]
+    fn leaves_short_clean_input_unchanged() {
+        assert_eq!(sanitize_error("add_doc: disk full"), "add_doc: disk full");
+    }
 }

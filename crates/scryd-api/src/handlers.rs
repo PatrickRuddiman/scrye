@@ -277,10 +277,33 @@ pub async fn handle_status(State(state): State<AppState>) -> Response {
         last_seen_uid: Option<u32>,
     }
     #[derive(Serialize)]
+    struct LastIndexError {
+        message_id: String,
+        error: String,
+        attempts: u32,
+    }
+    #[derive(Serialize)]
+    struct DrainerStatus {
+        queue_depth: i64,
+        failed_permanent: i64,
+        last_index_error: Option<LastIndexError>,
+    }
+    #[derive(Serialize)]
+    struct DaemonStatus {
+        restart_count: i64,
+        consecutive_crashes: u32,
+        last_crash_unix: Option<i64>,
+        in_crash_loop: bool,
+        in_backoff: bool,
+        backoff_until_unix: Option<i64>,
+    }
+    #[derive(Serialize)]
     struct StatusResp {
         ok: bool,
         uptime_secs: u64,
         accounts: Vec<AccountStatus>,
+        drainer: DrainerStatus,
+        daemon: DaemonStatus,
     }
 
     let accounts = match state.storage.list_active_accounts().await {
@@ -316,10 +339,54 @@ pub async fn handle_status(State(state): State<AppState>) -> Response {
         });
     }
 
+    let queue = match state.storage.queue_health().await {
+        Ok(h) => h,
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                &e.to_string(),
+            );
+        }
+    };
+
+    let daemon_health = state.daemon_health;
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let in_backoff = daemon_health
+        .backoff_until_unix
+        .map(|until| now_unix < until)
+        .unwrap_or(false);
+
+    let drainer = DrainerStatus {
+        queue_depth: queue.depth,
+        failed_permanent: queue.failed_permanent,
+        last_index_error: queue.last_error.map(|e| LastIndexError {
+            message_id: e.message_id,
+            error: e.error,
+            attempts: e.attempts,
+        }),
+    };
+    let daemon = DaemonStatus {
+        restart_count: daemon_health.restart_count,
+        consecutive_crashes: daemon_health.consecutive_crashes,
+        last_crash_unix: daemon_health.last_crash_unix,
+        in_crash_loop: daemon_health.in_crash_loop,
+        in_backoff,
+        backoff_until_unix: daemon_health.backoff_until_unix,
+    };
+
     Json(StatusResp {
-        ok: true,
+        // A daemon in a crash loop is not healthy even though this request
+        // happened to land in an up window. Reflect the durable crash state
+        // instead of the previous hardcoded `true`.
+        ok: !daemon_health.in_crash_loop,
         uptime_secs: state.started_at.elapsed().as_secs(),
         accounts: out,
+        drainer,
+        daemon,
     })
     .into_response()
 }

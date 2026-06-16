@@ -14,6 +14,28 @@ pub struct IndexQueueRow {
     pub failed_permanent: bool,
 }
 
+/// Aggregate health of `index_queue`, surfaced through `GET /status` so a
+/// crash loop or a wave of permanent failures is visible without inspecting
+/// the journal or the database by hand.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueueHealth {
+    /// Rows still drainable (not permanently failed).
+    pub depth: i64,
+    /// Rows that hit the permanent-failure ceiling.
+    pub failed_permanent: i64,
+    /// The most recent per-item failure, if any.
+    pub last_error: Option<QueueLastError>,
+}
+
+/// The most recent failed `index_queue` row. `error` is already sanitized by
+/// the drainer before storage, so it is safe to echo to operators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueLastError {
+    pub message_id: String,
+    pub error: String,
+    pub attempts: u32,
+}
+
 impl StorageHandle {
     /// Enqueue a message for indexing. No-op if already queued (or already
     /// drained successfully — the row would be absent in that case).
@@ -93,7 +115,8 @@ impl StorageHandle {
                 "UPDATE index_queue SET \
                     attempts = ?1, \
                     last_error = ?2, \
-                    failed_permanent = ?3 \
+                    failed_permanent = ?3, \
+                    last_failed_at = strftime('%s','now') \
                  WHERE message_id = ?4",
                 params![new_attempts, err, permanent as i64, id],
             )?;
@@ -132,6 +155,45 @@ impl StorageHandle {
                 out.push(r?);
             }
             Ok(out)
+        })
+        .await
+    }
+
+    /// Aggregate queue health for `GET /status`: drainable depth, the count of
+    /// permanently-failed rows, and the single most recent failure (by
+    /// `last_failed_at`). Read-only.
+    pub async fn queue_health(&self) -> Result<QueueHealth, StorageError> {
+        self.with_reader(|conn| {
+            let depth: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM index_queue WHERE failed_permanent = 0",
+                [],
+                |r| r.get(0),
+            )?;
+            let failed_permanent: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM index_queue WHERE failed_permanent = 1",
+                [],
+                |r| r.get(0),
+            )?;
+            let last_error = conn
+                .query_row(
+                    "SELECT message_id, last_error, attempts FROM index_queue \
+                     WHERE last_error IS NOT NULL \
+                     ORDER BY last_failed_at DESC, queued_at DESC LIMIT 1",
+                    [],
+                    |r| {
+                        Ok(QueueLastError {
+                            message_id: r.get(0)?,
+                            error: r.get::<_, String>(1)?,
+                            attempts: r.get::<_, i64>(2)? as u32,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(QueueHealth {
+                depth,
+                failed_permanent,
+                last_error,
+            })
         })
         .await
     }
