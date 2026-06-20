@@ -88,6 +88,7 @@ External pieces this slice pins concretely:
     Rationale: cheap, reproducible, no Apple/Microsoft surface to worry about, spec is Linux-only.
 11. **Weight provenance.** Witchcraft's upstream Python download script names a specific Hugging Face revision; we pin the same revision in our `scryd-fetch-weights` helper and bake the SHA-256 of the resulting GGUF file into the helper's source. Re-running the helper without the weight file is idempotent. Rationale: reproducible installs; supply-chain hygiene; easy to bump in a future release.
 12. **No Debian / RPM / Homebrew / AUR / Nix packaging in v1.** Just tarballs on GitHub Releases. Rationale: out-of-scope for a v1 daemon that targets ops-savvy operators; downstream packaging is a v2 ergonomic.
+    - **v2 update:** native packages are now built with [nfpm](https://nfpm.goreleaser.com) — `.deb`, `.rpm`, Alpine `.apk`, and Arch `.pkg.tar.zst` for `x86_64` + `aarch64` — and attached to each release (config in `ops/nfpm/`, driver in `scripts/build-packages.sh`, wired through `.github/actions/build-linux-packages`). Homebrew / AUR / Nix remain out of scope.
 13. **Workspace `Cargo.toml` hygiene.** All shared dependency versions live in `[workspace.dependencies]`; member crates inherit via `dep = { workspace = true }`. Rationale: one place to bump rust edition / toolchain / lockfile drift.
 
 ## §4 Contracts & shapes

@@ -33,7 +33,47 @@ Flags (both test-only):
 | `--skip-weights` | don't run `scryd-fetch-weights`; daemon will auto-fetch on first start |
 | `--skip-systemctl` | don't `systemctl daemon-reload` + `enable --now` |
 
+## Install from a distro package
+
+Each release also ships native packages built with
+[nfpm](https://nfpm.goreleaser.com) for both `x86_64` and `aarch64`. Download the
+one matching your package manager from the
+[Releases page](https://github.com/PatrickRuddiman/scrye/releases) and install it
+locally (replace `X.Y.Z` and the arch as needed):
+
+```sh
+# Debian / Ubuntu / Mint / Pop!_OS
+sudo apt install ./scryd_X.Y.Z_amd64.deb
+
+# Fedora / RHEL / Rocky / Alma  (openSUSE: swap dnf -> zypper)
+sudo dnf install ./scryd-X.Y.Z-1.x86_64.rpm
+
+# Arch / Manjaro / EndeavourOS
+sudo pacman -U ./scryd-X.Y.Z-1-x86_64.pkg.tar.zst
+
+# Alpine — the binary is glibc, so install gcompat first
+sudo apk add gcompat
+sudo apk add --allow-untrusted ./scryd_X.Y.Z_x86_64.apk
+```
+
+Packages own the system tree, so they differ from the tarball install: the
+binaries land in **`/usr/bin`** and the unit at
+**`/usr/lib/systemd/system/scryd.service`**. The package creates the `scryd`
+user, lays out `/etc/scryd` + `/var/lib/scryd`, and runs `daemon-reload`, but it
+does **not** start the service — `USER_EMAIL` is mandatory. After installing,
+follow [Configure the mailbox](#configure-the-mailbox) and then
+`sudo systemctl enable --now scryd`. The first start fetches the weights
+automatically.
+
+Verify a download against the release's `SHA256SUMS` before installing:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
 ## What the install creates
+
+The tarball installer (`install.sh`) creates:
 
 | Artifact | Owner | Mode | Notes |
 |---|---|---|---|
@@ -43,6 +83,11 @@ Flags (both test-only):
 | `/var/lib/scryd/` | scryd:scryd | 0700 | meta DB + witchcraft index |
 | `/var/lib/scryd/assets/` | scryd:scryd | 0755 | xtr asset bundle (mmap-readable) |
 | `/etc/systemd/system/scryd.service` | root:root | 0644 | the unit (no socket, no tmpfiles) |
+
+Native packages create the same `scryd` user, `/etc/scryd`, and `/var/lib/scryd`
+tree, but install the binaries under `/usr/bin` and the unit at
+`/usr/lib/systemd/system/scryd.service`.
+
 
 ## Service posture (what scryd defends, what it doesn't)
 
