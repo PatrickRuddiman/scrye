@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # System installer for scryd.
 #
-# Lays out the FHS tree (/etc/scryd, /var/lib/scryd, /run/scryd),
-# creates a dedicated `scryd` system user, installs the systemd
-# unit + tmpfiles drop-in, fetches T5 weights, and enables the
-# system service.
+# Lays out the FHS tree (/etc/scryd, /var/lib/scryd), creates a
+# dedicated `scryd` system user, installs the systemd unit, fetches
+# T5 weights, and enables the system service.
 #
-# v0.3.x is the service shape: install once per server, link N
-# IMAP accounts, expose an open search api tagged by account_id.
-# No per-operator install; no isolation between operator and
-# daemon UIDs (auth lives in the consumer's higher-layer api).
+# scryd is a single-purpose daemon: it fetches the IMAP mailbox whose
+# login matches the mandatory USER_EMAIL, indexes it with witchcraft,
+# and serves search over an MCP server on loopback TCP (default
+# 127.0.0.1:7878). There is no CLI client and no other control surface.
 #
-# Idempotent on a v0.3.x host (config + weights + index preserved;
+# Idempotent on an existing host (config + weights + index preserved;
 # binary + unit replaced; daemon restarted).
 #
 # Flags:
@@ -46,7 +45,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for required in scryd scryd-fetch-weights scryd.service.in scryd.tmpfiles.in LICENSE; do
+for required in scryd scryd-fetch-weights scryd.service.in LICENSE; do
     if [[ ! -e "$SCRIPT_DIR/$required" ]]; then
         echo "scryd install: bundled file missing: $SCRIPT_DIR/$required" >&2
         exit 1
@@ -68,24 +67,17 @@ fi
 install -m 0755 "$SCRIPT_DIR/scryd" /usr/local/bin/scryd
 install -m 0755 "$SCRIPT_DIR/scryd-fetch-weights" /usr/local/bin/scryd-fetch-weights
 
-# Templates ship with no substitution placeholders in the v0.3.x
-# service shape — copy them verbatim. The .in suffix is kept for
-# backwards compatibility with operators who may have scripts
-# assuming the rendered-from-template shape.
+# The systemd unit ships with no substitution placeholders — copy it
+# verbatim. The .in suffix is kept for backwards compatibility with
+# operators who may have scripts assuming the rendered-from-template
+# shape.
 install -m 0644 -o root -g root "$SCRIPT_DIR/scryd.service.in" /etc/systemd/system/scryd.service
-install -d -m 0755 /etc/tmpfiles.d
-install -m 0644 -o root -g root "$SCRIPT_DIR/scryd.tmpfiles.in" /etc/tmpfiles.d/scryd.conf
 
 if [[ $SKIP_SYSTEMCTL -eq 0 ]]; then
-    if ! command -v systemd-tmpfiles >/dev/null 2>&1; then
-        echo "scryd install: systemd-tmpfiles not found — is this host running systemd?" >&2
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "scryd install: systemctl not found — is this host running systemd?" >&2
         exit 1
     fi
-    systemd-tmpfiles --create /etc/tmpfiles.d/scryd.conf
-else
-    # No systemd available (test env). Provision /run/scryd manually
-    # mirroring what tmpfiles.d would do.
-    install -d -m 0755 -o scryd -g scryd /run/scryd
 fi
 
 if [[ $SKIP_WEIGHTS -eq 0 ]]; then
@@ -119,8 +111,19 @@ cat <<EOF
 scryd v${INSTALLED_VERSION} installed.
 
 next steps:
-  sudo scryd add-account
-  scryd search "test"
+  1. set the mailbox to serve (mandatory — the daemon won't start until you do):
+       sudo systemctl edit scryd
+       # add under [Service]:
+       #   Environment=USER_EMAIL=you@example.com
+  2. add the matching IMAP account to /etc/scryd/config.toml
+     ([[accounts]] with user = "you@example.com")
+  3. start it:
+       sudo systemctl restart scryd
+  4. point an MCP client at the search surface:
+       http://127.0.0.1:7878/mcp   (override via Environment=SCRYD_MCP_BIND=)
+
+scryd has no CLI client: fetch + index run automatically and search is
+served only over MCP.
 
 logs:
   journalctl -u scryd -f

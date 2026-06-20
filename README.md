@@ -1,54 +1,73 @@
 # scryd
 
-**An IMAP indexer + search service. Install once per server, link any number of accounts, query an open API tagged by `account_id`.**
+**A single-purpose mail daemon: it fetches one IMAP mailbox, indexes it with
+[witchcraft](https://github.com/dropbox/witchcraft), and serves semantic search
+over a local [MCP](https://modelcontextprotocol.io) server — and nothing else.**
 
-scryd is a Linux service. Operators install it on a server, configure
-`[[accounts]]` in `/etc/scryd/config.toml`, and let it index continuously
-in the background via IMAP IDLE + a [witchcraft](https://github.com/dropbox/witchcraft)-backed
-semantic index. The HTTP-over-UDS API is open by default — anyone who can
-reach `/run/scryd/scryd.sock` can query the full index. The consumer's
-higher-layer API service is the auth boundary: it authenticates end-users,
-decides which `account_ids` each is allowed to see, and passes that filter
-on every search call.
+scryd does exactly three things:
 
-## What it does
+1. **Fetches** the IMAP mailbox whose login equals the mandatory `USER_EMAIL`
+   environment variable (IMAP IDLE + polling, in the background).
+2. **Indexes** every message with a witchcraft-backed T5 XTR semantic index.
+3. **Serves search** over a Model Context Protocol server bound to loopback TCP
+   (`127.0.0.1:7878` by default), so any local MCP-capable AI client can query
+   the mailbox.
 
-- **Indexes mail in the background.** scryd connects to IMAP using an app
-  password (per account), fetches messages, parses MIME, converts HTML to
-  Markdown, and writes everything into `/var/lib/scryd/` + a persistent
-  witchcraft index at `/var/lib/scryd/witchcraft.sqlite`.
-- **Serves search over a local socket.** `/run/scryd/scryd.sock` mode 0666
-  by default; configurable via `[server] socket_mode`.
-- **Multi-account by design.** Documents carry their `account_id`; the
-  search API takes a multi-value `?account_ids=a,b,c` filter so the
-  consumer can scope each query.
-- **Three search modes.** `fulltext` (BM25), `semantic` (T5 XTR embeddings
-  via witchcraft), and `hybrid` (RRF fusion of the two).
-- **Filters by sender, folder, account, and date range.** Same filter chain
-  in every mode.
-- **Returns full message bodies, threads, and raw `.eml` source.**
-- **No auth at the scryd layer.** Auth is the consumer's job — see
-  [`docs/security.md`](docs/security.md) for the threat model.
+There is **no CLI client and no other control surface**. The MCP server is the
+only way in, and every response is scoped to `USER_EMAIL` — the daemon serves a
+single mailbox owner and refuses to start unscoped.
 
 ## Why an agent should use it
 
-Email is most organizations' largest unindexed knowledge source — receipts,
-invoices, contracts, agreements, decisions, introductions, the conversation
-history behind every project. scryd makes that history queryable in the same
-shape an agent already uses for code search and document retrieval: short
-ranked snippets with stable IDs you can fetch the full context for.
+Email is most people's largest unindexed knowledge source — receipts, invoices,
+contracts, decisions, introductions, the conversation history behind every
+project. scryd makes that history queryable in the shape an agent already speaks:
+MCP tools that return short ranked snippets with stable IDs you can expand to the
+full message, thread, or raw `.eml`.
+
+## The MCP surface
+
+scryd speaks MCP over Streamable HTTP at `http://127.0.0.1:7878/mcp` (override
+with `SCRYD_MCP_BIND`; the address must stay on a loopback interface). It
+advertises six read-only tools:
+
+| Tool | Purpose |
+|---|---|
+| `search` | Ranked hits across the mailbox (fulltext / semantic / hybrid), with sender / folder / date filters. |
+| `get_message` | One parsed message by id (body as Markdown + headers). |
+| `get_raw_message` | The raw RFC 5322 `.eml` source of a message. |
+| `get_thread` | Every message in a thread, oldest first. |
+| `list_accounts` | The configured account(s) owned by `USER_EMAIL`. |
+| `status` | Daemon health: uptime, per-account sync state, drainer + crash-loop status. |
+
+Fetching and indexing run automatically inside the daemon — there are no
+`sync`/`reindex`/`add-account` tools and no write surface of any kind.
+
+### Scoping (`USER_EMAIL`)
+
+`USER_EMAIL` is mandatory and is the daemon's only authorization boundary:
+
+- At startup scryd keeps only the configured `[[accounts]]` whose `user` (IMAP
+  login) equals `USER_EMAIL` (case-insensitive), so it fetches and indexes
+  **only that mailbox**.
+- Every MCP tool re-resolves the owned `account_id`(s) on each call and filters
+  results to them. A message id belonging to any other account returns
+  `not_found` — the same answer a truly missing id gets, so existence never
+  leaks.
+- If `USER_EMAIL` is unset or empty the daemon exits non-zero before binding
+  anything.
 
 ## Components
 
 | Crate / binary | Purpose |
 |---|---|
-| `scryd` | The CLI + daemon (`scryd add-account`, `scryd search`, `scryd reindex`, `scryd serve`) |
-| `scryd-fetch-weights` | Helper that downloads + verifies the T5 GGUF weights on first install |
+| `scryd` | The daemon binary (no subcommands; runs fetch + index + MCP serve) |
+| `scryd-mcp` | The MCP server: scoped tools over Streamable HTTP |
+| `scryd-fetch-weights` | Helper that downloads + verifies the T5 GGUF weights on first start |
 | `scryd-storage` | SQLite metadata + raw-eml store + write queue |
 | `scryd-mime` | MIME parse + HTML→Markdown |
 | `scryd-imap` | IMAP client + scheduler |
-| `scryd-search` | Witchcraft binding (`WitchcraftIndexer` / `InMemoryIndexer`) |
-| `scryd-api` | Axum router over UDS |
+| `scryd-search` | Witchcraft semantic indexer |
 | `scryd-runtime` | Daemon orchestration + preflight |
 | `scryd-config` / `scryd-log` | Config types + JSON-line logging |
 
@@ -56,21 +75,17 @@ ranked snippets with stable IDs you can fetch the full context for.
 
 ### Requirements
 
-- Linux x86_64 or aarch64 with systemd (Ubuntu 22.04+, Debian 12+,
-  Fedora 36+, Arch). The release tarballs are linked against
-  glibc 2.34+; older distros need to build from source.
-- Root (the installer creates a system user and writes under `/etc`,
-  `/var/lib`, `/usr/local/bin`, and `/etc/systemd/system`).
-- Internet access on first start for `scryd-fetch-weights` to
-  download the witchcraft asset bundle (~61 MB; SHA-256-verified
-  against the version baked into the binary). The bundle contains
-  `config.json` + `tokenizer.json` + `xtr.gguf`.
+- Linux x86_64 or aarch64 with systemd (Ubuntu 22.04+, Debian 12+, Fedora 36+,
+  Arch). Release tarballs link against glibc 2.34+; older distros build from
+  source. (scryd does **not** build on Windows or macOS — the witchcraft backend
+  and several daemon crates are Linux-only.)
+- Root, to create the system user and write under `/etc`, `/var/lib`,
+  `/usr/local/bin`, and `/etc/systemd/system`.
+- Internet on first start for `scryd-fetch-weights` to download the witchcraft
+  asset bundle (~61 MB, SHA-256-verified): `config.json` + `tokenizer.json` +
+  `xtr.gguf`.
 
 ### Quick install
-
-Download the per-arch tarball from the
-[Releases page](https://github.com/PatrickRuddiman/scrye/releases),
-extract, and run the installer:
 
 ```sh
 tar -xzf scryd-vX.Y.Z-x86_64-linux.tar.gz
@@ -78,191 +93,73 @@ cd scryd-vX.Y.Z-x86_64-linux
 sudo ./install.sh
 ```
 
-`install.sh` is non-interactive and idempotent. Useful flags:
+`install.sh` is non-interactive and idempotent. Flags `--skip-weights` and
+`--skip-systemctl` exist for test environments.
 
-| Flag | Purpose |
-|---|---|
-| `--skip-weights` | test only: don't run `scryd-fetch-weights`; daemon will fetch on first start |
-| `--skip-systemctl` | test only: don't `systemctl daemon-reload` + `enable --now` |
-
-What `install.sh` lays down:
+What it lays down:
 
 | Path | Owner | Mode | Purpose |
 |---|---|---|---|
-| `/usr/local/bin/scryd` | root:root | 0755 | CLI + daemon binary |
+| `/usr/local/bin/scryd` | root:root | 0755 | daemon binary |
 | `/usr/local/bin/scryd-fetch-weights` | root:root | 0755 | asset-bundle downloader |
-| `/etc/scryd/config.toml` | scryd:scryd | 0640 | IMAP accounts (group `scryd` can read; world cannot) |
+| `/etc/scryd/config.toml` | scryd:scryd | 0640 | IMAP account (group `scryd` can read; world cannot) |
 | `/var/lib/scryd/` | scryd:scryd | 0700 | meta DB + witchcraft index |
 | `/var/lib/scryd/assets/` | scryd:scryd | 0755 | xtr asset bundle |
-| `/run/scryd/` | scryd:scryd | 0755 | runtime dir; tmpfiles.d |
-| `/run/scryd/scryd.sock` | scryd:scryd | 0666 | API socket (open by default; see `[server]` to tighten) |
-| `/etc/systemd/system/scryd.service` | root:root | 0644 | rendered unit |
-| `/etc/tmpfiles.d/scryd.conf` | root:root | 0644 | rendered drop-in |
+| `/etc/systemd/system/scryd.service` | root:root | 0644 | the unit |
 
-### First account
+### Configure the mailbox
 
-Interactive (operator at a terminal):
+scryd serves the mailbox named by `USER_EMAIL`, so you must set it **and** add a
+matching `[[accounts]]` entry whose `user` equals that address.
 
-```sh
-sudo scryd add-account
-```
+1. Set `USER_EMAIL` on the unit (the daemon won't start until you do):
 
-The CLI prompts for IMAP host / port / user / password / folders;
-writes them into `/etc/scryd/config.toml` (owned by scryd:scryd 0640)
-and POSTs `/internal/reconcile` to the daemon so the new account is
-picked up without a restart. If the daemon isn't running yet, the
-CLI prints `apply changes: sudo systemctl start scryd` instead.
+   ```sh
+   sudo systemctl edit scryd
+   # add under [Service]:
+   #   Environment=USER_EMAIL=alice@example.com
+   ```
 
-Non-interactive (provisioning script / agent):
+2. Hand-edit `/etc/scryd/config.toml` (owned by `scryd:scryd`, mode 0640):
 
-```sh
-printf '%s' "$IMAP_PASSWORD" | sudo scryd add-account \
-    --account-id work \
-    --host imap.example.com \
-    --port 993 \
-    --user alice@example.com \
-    --password-stdin \
-    --folders INBOX,Archive
-```
+   ```toml
+   [[accounts]]
+   id = "primary"
+   host = "imap.example.com"
+   port = 993
+   user = "alice@example.com"   # must equal USER_EMAIL
+   password = "..."
+   tls = true
+   folders = ["INBOX"]
+   # optional per-account custom CA for self-signed corporate IMAP:
+   # tls_ca_path = "/etc/scryd/work-ca.pem"
 
-`--port` defaults to `993`; `--folders` defaults to `INBOX` if
-omitted. `account-id` must match `^[a-z0-9_-]+$`. `add-account` is
-upsert-semantic on the id: re-running with the same `--account-id`
-overwrites the existing entry, so the call is safe to retry.
+   # optional: override the loopback MCP bind (default 127.0.0.1:7878)
+   # [server]
+   # mcp_bind = "127.0.0.1:7878"
+   ```
 
-The minimal `[[accounts]]` table for hand-editing
-`/etc/scryd/config.toml` directly:
+3. Start it:
 
-```toml
-[[accounts]]
-id = "work"
-host = "imap.example.com"
-port = 993
-user = "alice@example.com"
-password = "..."
-tls = true
-folders = ["INBOX"]
-# optional: per-account custom CA for self-signed corporate IMAP.
-# tls_ca_path = "/etc/scryd/work-ca.pem"
-```
+   ```sh
+   sudo systemctl restart scryd
+   journalctl -u scryd -f
+   ```
 
-`tls_ca_path` is config-only — `scryd add-account` has no
-`--tls-ca-path` flag. For corporate / self-signed IMAP, run
-`add-account` first, then hand-edit the `[[accounts]]` block and
-`sudo systemctl restart scryd`.
+### Connect an MCP client
 
-### Verify it's working
-
-```sh
-# Live tail the daemon log.
-journalctl -u scryd -f
-
-# Run a search (socket is 0666 by default — any local user works).
-scryd search "from:bob"
-
-# Check the index size.
-sudo ls /var/lib/scryd/
-```
-
-### Daily commands
-
-```sh
-# Reads (no sudo).
-scryd search "lunch with bob since:2026-01-01"
-scryd reindex
-scryd sync
-scryd status
-
-# Mutations (sudo because only scryd:scryd can write the config;
-# add-account / rotate / remove POST /internal/reconcile so the
-# daemon picks up the change without a restart).
-sudo scryd add-account
-sudo scryd rotate-password <account-id>
-sudo scryd remove-account <account-id>
-```
-
-### Unattended install (agent / provisioning recipe)
-
-A copy-pasteable end-to-end install for provisioning scripts and AI
-agents. Requires only `curl`, `python3`, `tar`, `sudo`, and `systemd`
-on a Linux x86_64 / aarch64 host. The IMAP account secret is passed
-via the `$IMAP_PASSWORD` env var.
-
-```sh
-set -euo pipefail
-
-# 1. Discover the latest release tarball URL for this arch.
-arch="$(uname -m)"   # x86_64 or aarch64
-download_url="$(curl -fsSL https://api.github.com/repos/PatrickRuddiman/scrye/releases/latest \
-    | python3 -c "
-import json, sys
-arch = '$arch'
-data = json.load(sys.stdin)
-for a in data['assets']:
-    if a['name'].endswith(f'{arch}-linux.tar.gz'):
-        print(a['browser_download_url'])
-        break
-")"
-
-# 2. Fetch + extract + install. install.sh is idempotent — safe to
-#    re-run. It runs scryd-fetch-weights inline (~61 MB asset bundle
-#    download) and `systemctl enable --now scryd` before returning.
-curl -fsSL -o /tmp/scryd.tar.gz "$download_url"
-mkdir -p /tmp/scryd-install
-tar -xzf /tmp/scryd.tar.gz -C /tmp/scryd-install --strip-components=1
-sudo /tmp/scryd-install/install.sh
-
-# 3. Poll for the daemon to be accepting. The systemd unit returns
-#    "started" before witchcraft finishes loading the model, so the
-#    socket may exist briefly before searches succeed.
-deadline=$(( $(date +%s) + 90 ))
-until scryd status >/dev/null 2>&1; do
-    [[ $(date +%s) -lt $deadline ]] || { echo "daemon not ready in 90s"; exit 1; }
-    sleep 2
-done
-
-# 4. Add (or update) the IMAP account. `scryd add-account` is upsert-
-#    semantic on `--account-id`: re-running with the same id overwrites
-#    the existing entry, so it's safe to call unconditionally on agent
-#    retry without an existence check.
-printf '%s' "$IMAP_PASSWORD" | sudo scryd add-account \
-    --account-id work \
-    --host imap.example.com \
-    --user alice@example.com \
-    --password-stdin \
-    --folders INBOX
-
-# 5. Confirm the account is actually indexing. `scryd status` prints
-#    JSON; `accounts[].last_seen_uid` flips to non-null once the
-#    supervisor has fetched any message from the primary folder.
-#    Budget generously — large mailboxes take minutes on the first
-#    pass. Returning empty `accounts` means the daemon hasn't read
-#    the reconciled config yet; keep polling.
-deadline=$(( $(date +%s) + 600 ))
-until scryd status \
-    | python3 -c "
-import json, sys
-s = json.load(sys.stdin)
-acct = next((a for a in s['accounts'] if a['account_id'] == 'work'), None)
-sys.exit(0 if acct and acct.get('last_seen_uid') else 1)
-"; do
-    [[ $(date +%s) -lt $deadline ]] || { echo "account 'work' did not begin indexing in 10m"; exit 1; }
-    sleep 5
-done
+Point any MCP client (Claude Desktop, an agent framework, your own code) at the
+Streamable-HTTP endpoint:
 
 ```
+http://127.0.0.1:7878/mcp
+```
 
-Note that `last_seen_uid` confirms the IMAP fetch is making progress
-but not that searches will return hits yet — the witchcraft drainer
-runs slightly behind the meta DB on large initial syncs. If `scryd
-search` returns empty immediately after step 5 succeeds, wait or
-call `scryd reindex` to force a drain pass.
-
-For air-gapped or repo-pinned installs that don't depend on
-`/releases/latest`, substitute the literal release URL — e.g.
-`https://github.com/PatrickRuddiman/scrye/releases/download/v0.3.7/scryd-v0.3.7-x86_64-linux.tar.gz`
-(check the [Releases page](https://github.com/PatrickRuddiman/scrye/releases) for the
-current tag).
+Then call the tools — e.g. `search` with `{"q": "annual invoice from acme",
+"mode": "hybrid", "limit": 10}`, and `get_message` / `get_thread` /
+`get_raw_message` to expand a hit. Use `status` to confirm the daemon is healthy
+and the account is indexing (`accounts[].last_seen_uid` flips to non-null once
+the first message is fetched).
 
 ### Uninstall
 
@@ -270,91 +167,58 @@ current tag).
 sudo ./uninstall.sh
 ```
 
-Removes the system service, unit file, tmpfiles drop-in, FHS
-directories, binaries, and the `scryd` Linux account. Idempotent.
+Removes the service, unit file, FHS directories, binaries, and the `scryd` Linux
+account. Idempotent.
 
-For more — isolation property table, journalctl recipes, full
-walkthrough — see [ops/README.install.md](ops/README.install.md).
+For the full walkthrough — isolation property table, journalctl recipes, asset
+bundle details — see [ops/README.install.md](ops/README.install.md).
 
 ## Security posture
 
-scryd is open by default: anyone who can reach `/run/scryd/scryd.sock`
-can call the API. The dedicated `scryd` system user owns the config
-file and the index, so non-root non-`scryd`-group users still can't
-read the IMAP credential at rest — but the search API has no auth.
+scryd binds MCP to a **loopback** TCP address only and refuses any routable
+interface. Within the host, the boundary is `USER_EMAIL`: the daemon only ever
+fetches and returns the one mailbox it is scoped to. The dedicated `scryd` system
+user owns the config and index (mode 0640 / 0700), so other non-root users can't
+read the IMAP credential at rest.
 
-**The consumer's API is the auth boundary.** It authenticates
-end-users, decides which `account_ids` each is allowed to see, and
-passes that filter on every search call (`?account_ids=a,b,c`).
-Empty filter = all accounts.
-
-See [`docs/security.md`](docs/security.md) for the full threat model
-and the consumer's checklist. Hardening knobs (`[server]
-require_peer_uid = true`, `socket_mode = 0o660`) live in
-[`scryd-spec.md`](scryd-spec.md).
-
-## Use
-
-### From the CLI
-
-```sh
-scryd search "annual invoice from acme"
-scryd search "birthday plans" --since 2026-01-01 --mode semantic --limit 10
-scryd search "contract terms" --accounts work,personal --folder INBOX --json
-scryd sync                              # signal every supervisor
-scryd status                            # daemon uptime + per-account state
-```
-
-### From an agent
-
-The agent shells out to `scryd search ... --json` (the simplest contract) or
-talks to the UDS directly:
-
-```
-GET /search?q=annual%20invoice&mode=hybrid&limit=10
-GET /search?q=invoice&account_ids=alice-personal,support-inbox
-```
-
-Returns ranked hits with `message_id`, `score`, snippet, sender, subject,
-date, folder. Then:
-
-```
-GET /message/<id>
-GET /thread/<id>
-GET /message/<id>/raw
-```
-
-…to pull the full body, the surrounding thread, or the raw `.eml` source.
+There is no bearer-token / OAuth auth on the MCP endpoint yet — local-loopback +
+single-mailbox scoping is the v1 boundary; token auth is a future follow-up. See
+[`docs/security.md`](docs/security.md) for the threat model.
 
 ## Architecture in one breath
 
 ```
-   IMAP server(s) ──IDLE/poll──▶  scryd  ──UDS──▶  consumer's API ──▶ end-user
-                                    │              (open socket; consumer
-                       ┌────────────┴────────┐      filters by account_ids)
-                       ▼                     ▼
-                meta.sqlite +           witchcraft.sqlite
-                raw .eml store          (persistent T5 XTR
-                  (scryd:scryd)          embeddings)
+   IMAP server ──IDLE/poll──▶  scryd  ──MCP/loopback HTTP──▶  AI client
+   (USER_EMAIL's mailbox)        │        (127.0.0.1:7878/mcp,
+                    ┌────────────┴────────┐   scoped to USER_EMAIL)
+                    ▼                     ▼
+             meta.sqlite +           witchcraft.sqlite
+             raw .eml store          (persistent T5 XTR
+               (scryd:scryd)          embeddings)
 ```
 
-One scryd install per server. N IMAP accounts. Each indexed
-document carries its `account_id`. Consumer's higher-layer API is
-the auth boundary.
+One daemon, one mailbox, one local search surface.
 
 ## Local development
 
-Build from source on Linux:
+scryd's daemon crates are Linux-only (witchcraft + the Unix runtime). Build and
+test on Linux:
 
 ```sh
 git clone https://github.com/PatrickRuddiman/scrye.git
 cd scrye
 cargo build --release -p scryd -p scryd-fetch-weights
+cargo test --workspace
 ```
 
-The integration test suite hits a real IMAP server. Spin up
-[GreenMail](https://greenmail-mail-test.github.io/greenmail/) in
-Docker, then run `cargo test`:
+On a Windows or macOS host, build and test inside a Linux container (e.g.
+`rust:1-bookworm` with `build-essential cmake clang libclang-dev pkg-config
+libssl-dev git`) — the witchcraft backend won't compile natively.
+
+Integration tests that hit a real IMAP server use
+[GreenMail](https://greenmail-mail-test.github.io/greenmail/); they skip silently
+when it isn't reachable. The full end-to-end smoke (real fetch → index → MCP
+search round-trip) is:
 
 ```sh
 docker run -d --rm --name greenmail \
@@ -364,30 +228,19 @@ docker run -d --rm --name greenmail \
                      -Dgreenmail.users=test:test@localhost -Dgreenmail.auth.disabled" \
   greenmail/standalone:latest
 
-cargo test --workspace
-```
-
-Tests that require GreenMail skip silently with a stderr hint when the
-container isn't reachable. The full end-to-end smoke (install + index
-+ search) runs as:
-
-```sh
 cargo build --release -p scryd -p scryd-fetch-weights
 bash tests/e2e_imap_to_search.sh
 ```
 
 ## CI
 
-Two GitHub Actions workflows:
-
-- **`ci.yml`** — runs on every push to `main` and every pull request:
-  cargo-deny check, `cargo test --workspace`, install.sh smoke test,
-  end-to-end imap-to-search smoke (50 messages injected via SMTP →
-  scryd indexes → `scryd search` returns hits). GreenMail runs as a
-  GH Actions service container.
-- **`release.yml`** — fires on `v*` tags and `workflow_dispatch`.
-  Same test gates plus per-arch tarball packaging (x86_64 +
-  aarch64), SHA-256 sums, and `gh release create`.
+- **`ci.yml`** — every push to `main` and every PR: cargo-deny check,
+  `cargo test --workspace`, systemd-unit verification, install.sh smoke test, and
+  the end-to-end fetch → index → MCP-search smoke against a GreenMail service
+  container.
+- **`release.yml`** — fires on `v*` tags and `workflow_dispatch`: the same gates
+  plus per-arch tarball packaging (x86_64 + aarch64), SHA-256 sums, and
+  `gh release create`.
 
 ## License
 

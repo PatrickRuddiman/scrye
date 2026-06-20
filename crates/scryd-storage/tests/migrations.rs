@@ -49,6 +49,7 @@ fn all_expected_tables_exist() {
     for required in [
         "accounts",
         "attachments",
+        "daemon_runs",
         "index_queue",
         "messages",
         "schema_version",
@@ -67,6 +68,7 @@ fn all_expected_indexes_exist() {
     let indexes = collect_index_names(&conn);
     for required in [
         "idx_attachments_message",
+        "idx_daemon_runs_started",
         "idx_index_queue_drainer",
         "idx_messages_account",
         "idx_messages_date",
@@ -80,15 +82,14 @@ fn all_expected_indexes_exist() {
         );
     }
     assert!(
-        indexes.len() >= 7,
-        "expected at least 7 indexes, got {} ({indexes:?})",
+        indexes.len() >= 8,
+        "expected at least 8 indexes, got {} ({indexes:?})",
         indexes.len()
     );
 }
 
 #[test]
-fn unique_constraint_present_on_messages() {
-    let (_dir, _, conn) = fresh_db();
+fn unique_constraint_present_on_messages() {    let (_dir, _, conn) = fresh_db();
     let sql: String = conn
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'",
@@ -128,5 +129,37 @@ fn foreign_keys_enforced() {
     assert!(
         result.is_err(),
         "FK enforcement absent: ghost account_id was accepted"
+    );
+}
+
+#[test]
+fn index_queue_has_last_failed_at_column() {
+    let (_dir, _, conn) = fresh_db();
+    let sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='index_queue'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        sql.contains("last_failed_at"),
+        "v2 column missing in index_queue DDL:\n{sql}"
+    );
+}
+
+#[test]
+fn daemon_runs_run_id_autoincrements() {
+    let (_dir, _, conn) = fresh_db();
+    let sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='daemon_runs'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        sql.contains("AUTOINCREMENT"),
+        "daemon_runs.run_id must AUTOINCREMENT so ids stay monotonic across pruning:\n{sql}"
     );
 }

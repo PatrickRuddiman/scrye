@@ -1,5 +1,5 @@
 [Unit]
-Description=scryd — read-only IMAP indexer & search daemon
+Description=scryd — IMAP indexer & MCP search daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -7,21 +7,40 @@ Wants=network-online.target
 Type=simple
 User=scryd
 Group=scryd
-ExecStart=/usr/local/bin/scryd serve
+ExecStart=/usr/local/bin/scryd
+# Restart on crash. scryd also rate-limits its own crash loops in-process:
+# it records each run in meta.sqlite (daemon_runs) and, once it sees
+# CRASH_LOOP_THRESHOLD consecutive unclean shutdowns within ~10min, sleeps with
+# capped exponential backoff at startup before reopening the indexer. That keeps
+# a restart storm from burning CPU while leaving the daemon up so the MCP
+# `status` tool (ok=false during a loop) stays honest. We deliberately do NOT
+# set StartLimitIntervalSec/StartLimitBurst here: parking the unit would hide the
+# crash-loop signal that `status` is meant to surface. Tune those only if you
+# prefer systemd to stop restarting a persistently broken install.
 Restart=on-failure
 RestartSec=5
 
+# USER_EMAIL is MANDATORY and is the daemon's only authorization boundary: it
+# scopes every MCP response to the account(s) whose IMAP login equals this
+# address. The daemon refuses to start when it is empty, so set it to the
+# mailbox you want served before enabling the unit, e.g.:
+#   sudo systemctl edit scryd   # add: [Service]\nEnvironment=USER_EMAIL=you@example.com
+Environment=USER_EMAIL=
+# Optional: override the loopback MCP bind (default 127.0.0.1:7878). Must stay
+# on a loopback address — the daemon refuses to bind a routable interface.
+# Environment=SCRYD_MCP_BIND=127.0.0.1:7878
 Environment=XDG_CONFIG_HOME=/etc/scryd
 Environment=XDG_DATA_HOME=/var/lib/scryd
-Environment=XDG_RUNTIME_DIR=/run/scryd
 
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/etc/scryd /var/lib/scryd /run/scryd
+ReadWritePaths=/etc/scryd /var/lib/scryd
 PrivateTmp=yes
 PrivateDevices=yes
 LockPersonality=yes
+# AF_INET/AF_INET6: IMAP fetch + the loopback MCP listener. AF_UNIX is retained
+# only for libc name resolution (nss/nscd); the daemon binds no Unix socket.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 SystemCallFilter=@system-service
 SystemCallArchitectures=native

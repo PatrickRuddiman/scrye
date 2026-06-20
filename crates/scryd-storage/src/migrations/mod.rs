@@ -5,6 +5,7 @@
 //! migration is a follow-up forward migration.
 
 mod v1_initial;
+mod v2_daemon_runs;
 
 use rusqlite::{Connection, Transaction};
 
@@ -21,7 +22,7 @@ pub enum MigrationError {
 }
 
 /// Ordered registry of every migration this binary knows. Append-only.
-const MIGRATIONS: &[(u32, &str)] = &[(1, v1_initial::SQL)];
+const MIGRATIONS: &[(u32, &str)] = &[(1, v1_initial::SQL), (2, v2_daemon_runs::SQL)];
 
 /// Apply any pending migrations. Safe to re-run on a fully migrated DB
 /// (no migrations execute, no rows added).

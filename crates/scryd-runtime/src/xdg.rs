@@ -9,24 +9,6 @@ const SCRYD_DIR: &str = "scryd";
 const ASSETS_SUBDIR: &str = "assets";
 const META_FILENAME: &str = "config.toml";
 
-/// `$XDG_RUNTIME_DIR/scryd`, OR `$XDG_RUNTIME_DIR` itself if it
-/// already ends in `/scryd` (the systemd unit sets it directly to
-/// `/run/scryd`). The env var is mandatory — without it, scryd has
-/// no per-user-and-volatile directory to put the API socket in.
-pub fn runtime_dir() -> Result<PathBuf, RuntimeError> {
-    match std::env::var("XDG_RUNTIME_DIR") {
-        Ok(s) if !s.is_empty() => {
-            let p = PathBuf::from(&s);
-            if p.file_name().and_then(|n| n.to_str()) == Some(SCRYD_DIR) {
-                Ok(p)
-            } else {
-                Ok(p.join(SCRYD_DIR))
-            }
-        }
-        _ => Err(RuntimeError::MissingRuntimeDir),
-    }
-}
-
 /// `$XDG_CONFIG_HOME/scryd/config.toml`, falling back to
 /// `$HOME/.config/scryd/config.toml`. The systemd unit sets
 /// `XDG_CONFIG_HOME=/etc/scryd` directly; we detect that and skip

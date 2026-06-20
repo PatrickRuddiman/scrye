@@ -8,12 +8,11 @@ use crate::{IndexError, IndexSubmit, MessageId, SearchError, SearchQuery, Search
 /// Operations the search-engine wrapper exposes upstream.
 ///
 /// Implementations:
-/// - [`crate::WitchcraftIndexer`] (default; gated on the
-///   `witchcraft-backend` feature, which ships on by default):
-///   the production binding to `dropbox/witchcraft`.
+/// - [`crate::WitchcraftIndexer`] (the required production indexer,
+///   compiled in on every Unix target): the binding to
+///   `dropbox/witchcraft`.
 /// - [`crate::InMemoryIndexer`]: a lightweight stub used by tests and by
-///   non-Linux dev workflows that don't want to pull the upstream
-///   toolchain.
+///   non-Unix dev workflows that don't pull the upstream toolchain.
 #[async_trait]
 pub trait Indexer: Send + Sync {
     async fn submit(&self, submit: IndexSubmit) -> Result<(), IndexError>;

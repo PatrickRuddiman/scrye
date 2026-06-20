@@ -1,16 +1,15 @@
 //! Integration tests for the witchcraft-backed indexer.
 //!
-//! All tests are `#[ignore]`-gated and only run when:
-//!   1. The crate is built with `--features witchcraft-backend`
-//!      (enforced by `[[test]] required-features` in Cargo.toml), and
-//!   2. The `XTR_ASSETS` env var points to a directory containing the
-//!      pinned T5 GGUF weights file (downloaded via
-//!      `scryd-fetch-weights`).
+//! The whole file is gated to Unix targets (where the witchcraft binding
+//! resolves); it is an empty compilation unit elsewhere. The individual
+//! tests are additionally `#[ignore]`-gated and only run when the
+//! `XTR_ASSETS` env var points to a directory containing the pinned T5
+//! GGUF weights file (downloaded via `scryd-fetch-weights`).
 //!
 //! Run with:
 //!   XTR_ASSETS=/path/to/assets/ \
-//!   cargo test -p scryd-search --features witchcraft-backend \
-//!     --test witchcraft -- --include-ignored
+//!   cargo test -p scryd-search --test witchcraft -- --include-ignored
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::path::PathBuf;
 

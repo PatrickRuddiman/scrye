@@ -7,7 +7,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-tokio = { workspace = true, features = ["signal", "rt-multi-thread", "macros", "sync"] }
+tokio = { workspace = true, features = ["signal", "rt-multi-thread", "macros", "sync", "time"] }
 async-trait = "0.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -19,7 +19,7 @@ scryd-log = { path = "../scryd-log" }
 scryd-storage = { path = "../scryd-storage" }
 scryd-search = { path = "../scryd-search" }
 scryd-imap = { path = "../scryd-imap" }
-scryd-api = { path = "../scryd-api" }
+scryd-mcp = { path = "../scryd-mcp" }
 scryd-mime = { path = "../scryd-mime" }
 sha2 = "0.10"
 hex = "0.4"

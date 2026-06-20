@@ -1,5 +1,4 @@
 use scryd_runtime::xdg;
-use scryd_runtime::RuntimeError;
 use serial_test::serial;
 
 // Each test mutates process-global env vars. `#[serial]` keeps them on a
@@ -14,25 +13,6 @@ fn clear_xdg_env() {
     ] {
         std::env::remove_var(key);
     }
-}
-
-#[test]
-#[serial]
-fn runtime_dir_requires_xdg_runtime_dir() {
-    clear_xdg_env();
-    match xdg::runtime_dir() {
-        Err(RuntimeError::MissingRuntimeDir) => {}
-        other => panic!("expected MissingRuntimeDir, got {other:?}"),
-    }
-}
-
-#[test]
-#[serial]
-fn runtime_dir_appends_scryd() {
-    clear_xdg_env();
-    std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1001");
-    let p = xdg::runtime_dir().unwrap();
-    assert_eq!(p, std::path::PathBuf::from("/run/user/1001/scryd"));
 }
 
 #[test]
@@ -95,10 +75,14 @@ fn assets_dir_is_data_dir_plus_assets() {
 #[test]
 #[serial]
 fn empty_string_env_treated_as_unset() {
+    // An empty XDG var must be ignored, falling through to the HOME default
+    // rather than resolving to a bogus root-relative path.
     clear_xdg_env();
-    std::env::set_var("XDG_RUNTIME_DIR", "");
-    match xdg::runtime_dir() {
-        Err(RuntimeError::MissingRuntimeDir) => {}
-        other => panic!("expected MissingRuntimeDir for empty env, got {other:?}"),
-    }
+    std::env::set_var("XDG_DATA_HOME", "");
+    std::env::set_var("HOME", "/home/alice");
+    let p = xdg::data_dir().unwrap();
+    assert_eq!(
+        p,
+        std::path::PathBuf::from("/home/alice/.local/share/scryd")
+    );
 }

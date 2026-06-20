@@ -8,8 +8,7 @@ use crate::secret::AccountPassword;
 
 #[derive(Debug, Default, Deserialize)]
 pub struct Config {
-    /// Server-side knobs. Defaults to "open API, peercred check off"
-    /// — the v0.3.1 service shape. See [`ServerCfg`].
+    /// Server-side knobs — the MCP loopback bind address. See [`ServerCfg`].
     #[serde(default)]
     pub server: ServerCfg,
     #[serde(default)]
@@ -22,34 +21,22 @@ pub struct Config {
 
 #[derive(Debug, Deserialize)]
 pub struct ServerCfg {
-    /// Whether to enforce the SO_PEERCRED uid match at accept time.
-    /// Defaults to `false` (open) — the consumer's higher-layer API
-    /// is the auth boundary. Set to `true` to accept only the
-    /// daemon's own uid (same-uid enforcement).
-    #[serde(default = "default_require_peer_uid")]
-    pub require_peer_uid: bool,
-    /// File mode applied to `/run/scryd/scryd.sock` after bind. The
-    /// kernel rejects connections whose euid + group don't satisfy
-    /// the mode bits, so this is the coarse network-access gate.
-    /// Defaults to `0o666` (anyone on the host). Override to `0o660`
-    /// + manage the directory's group for kernel-level gating.
-    #[serde(default = "default_socket_mode")]
-    pub socket_mode: u32,
+    /// Loopback TCP bind address for the MCP server. Defaults to
+    /// `127.0.0.1:7878`. `SCRYD_MCP_BIND` overrides this at runtime. The MCP
+    /// server is the daemon's sole external surface; it is always bound to a
+    /// loopback address (the `USER_EMAIL` scope is the auth boundary).
+    #[serde(default = "default_mcp_bind")]
+    pub mcp_bind: String,
 }
 
-fn default_require_peer_uid() -> bool {
-    false
-}
-
-fn default_socket_mode() -> u32 {
-    0o666
+fn default_mcp_bind() -> String {
+    "127.0.0.1:7878".to_string()
 }
 
 impl Default for ServerCfg {
     fn default() -> Self {
         Self {
-            require_peer_uid: default_require_peer_uid(),
-            socket_mode: default_socket_mode(),
+            mcp_bind: default_mcp_bind(),
         }
     }
 }

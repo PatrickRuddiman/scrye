@@ -149,7 +149,6 @@ jobs:
           cp "target/${{ matrix.target }}/release/scryd-fetch-weights" "$stage/$out/"
           cp LICENSE "$stage/$out/"
           cp ops/scryd.service.in "$stage/$out/"
-          cp ops/scryd.tmpfiles.in "$stage/$out/"
           cp ops/install.sh "$stage/$out/"
           cp ops/uninstall.sh "$stage/$out/"
           cp ops/README.install.md "$stage/$out/"

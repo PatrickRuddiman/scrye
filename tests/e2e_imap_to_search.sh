@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # End-to-end test: GreenMail (already running on the host) <- SMTP
-# inject -> scryd indexes via IMAP -> scryd search returns hits.
+# inject -> scryd fetches via IMAP -> scryd indexes with witchcraft ->
+# search over the MCP server returns hits.
+#
+# scryd's only surface is the MCP server on loopback TCP, so this drives
+# search the way a real MCP client would (tests/mcp_client.py speaks the
+# Streamable-HTTP transport with stdlib only).
 #
 # Self-relaunches in a privileged debian:bookworm container with
 # --network host so the inner container reaches 127.0.0.1:3143
@@ -17,6 +22,8 @@
 #   bash tests/e2e_imap_to_search.sh
 
 set -euo pipefail
+
+MCP_URL="http://127.0.0.1:7878/mcp"
 
 if [[ ! -e /.dockerenv && -z "${SCRYD_E2E_INNER:-}" ]]; then
     REPO="$(git rev-parse --show-toplevel)"
@@ -55,18 +62,16 @@ cp target/release/scryd-fetch-weights "$BUNDLE/scryd-fetch-weights"
 cp ops/install.sh "$BUNDLE/install.sh"
 cp ops/uninstall.sh "$BUNDLE/uninstall.sh"
 cp ops/scryd.service.in "$BUNDLE/scryd.service.in"
-cp ops/scryd.tmpfiles.in "$BUNDLE/scryd.tmpfiles.in"
 cp LICENSE "$BUNDLE/LICENSE"
 chmod +x "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh" "$BUNDLE/scryd" "$BUNDLE/scryd-fetch-weights"
 
 note "running install.sh"
 (cd "$BUNDLE" && ./install.sh --skip-weights --skip-systemctl)
 
-# Stage the xtr-int4 OpenVINO asset bundle if the outer CI workflow
-# pre-fetched it into $REPO/assets-cache/. The host doesn't share its
-# /var/lib/scryd with this container, so the outer prime step can't
-# touch /var/lib/scryd directly — it leaves the four files under
-# $REPO/assets-cache/ and we copy them in here (chowned to scryd).
+# Stage the xtr-int4 asset bundle if the outer CI workflow pre-fetched it into
+# $REPO/assets-cache/. The host doesn't share its /var/lib/scryd with this
+# container, so the outer prime step leaves the files under $REPO/assets-cache/
+# and we copy them in here (chowned to scryd). Otherwise the daemon auto-fetches.
 note "staging xtr-gguf assets into /var/lib/scryd/assets (if pre-fetched)"
 if [[ -d /workspace/assets-cache && -e /workspace/assets-cache/xtr.gguf ]]; then
     install -d -o scryd -g scryd -m 0755 /var/lib/scryd/assets
@@ -78,6 +83,8 @@ else
     echo "WARN: /workspace/assets-cache/ missing xtr.gguf; daemon will auto-fetch on first start"
 fi
 
+# Both accounts log in as GreenMail user 'test', so both match USER_EMAIL=test
+# and the daemon fetches + indexes both (each mirrors the same INBOX).
 note "writing /etc/scryd/config.toml pointing at GreenMail (two accounts)"
 cat > /tmp/scryd-config.toml <<'EOF'
 [[accounts]]
@@ -100,7 +107,7 @@ folders = ["INBOX"]
 EOF
 install -m 0640 -o scryd -g scryd /tmp/scryd-config.toml /etc/scryd/config.toml
 
-note "injecting 50 messages via SMTP under 'primary' subject prefix"
+note "injecting 50 messages via SMTP"
 python3 - <<'PY'
 import smtplib
 from email.mime.text import MIMEText
@@ -112,29 +119,40 @@ for i in range(50):
     msg['Subject'] = f'e2e-{i}'
     s.sendmail('alice@localhost', ['test@localhost'], msg.as_string())
 s.quit()
-print(f'injected 50 messages')
+print('injected 50 messages')
 PY
 
 start_daemon() {
-    # Production runs the daemon as the scryd system user via the
-    # systemd unit. The privileged-docker smoke runs it as root
-    # because rusqlite's bundled SQLite misreports the freshly-
-    # created meta.sqlite as read-only when the uid switches mid-
-    # process via sudo / runuser inside this specific container
-    # layout. See task 09 triage for detail.
-    XDG_CONFIG_HOME=/etc/scryd \
+    # USER_EMAIL is mandatory and scopes everything to the matching account(s).
+    # The daemon binds its MCP server to loopback TCP (default 127.0.0.1:7878);
+    # there is no Unix socket and no `serve` subcommand. We run it as root here
+    # because rusqlite's bundled SQLite misreports the freshly-created
+    # meta.sqlite as read-only when the uid switches mid-process via sudo inside
+    # this specific container layout (see task 09 triage).
+    USER_EMAIL=test \
+        SCRYD_MCP_BIND=127.0.0.1:7878 \
+        XDG_CONFIG_HOME=/etc/scryd \
         XDG_DATA_HOME=/var/lib/scryd \
-        XDG_RUNTIME_DIR=/run/scryd \
-        /usr/local/bin/scryd serve > /tmp/scryd.log 2>&1 &
+        /usr/local/bin/scryd > /tmp/scryd.log 2>&1 &
     SCRYD_PID=$!
 }
 
-note "starting scryd serve in background"
-ls -la /var/lib/scryd
-sudo -u scryd touch /var/lib/scryd/probe-write && echo "scryd write probe OK" && rm /var/lib/scryd/probe-write
+# Poll the MCP server until it advertises the `search` tool (the daemon binds
+# MCP only after witchcraft finishes loading, so the port appears late).
+wait_for_mcp() {
+    local deadline=$(($(date +%s) + ${1:-120}))
+    while [[ $(date +%s) -lt $deadline ]]; do
+        if python3 tests/mcp_client.py "$MCP_URL" tools 2>/dev/null | grep -q '"search"'; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+note "starting scryd in background"
 start_daemon
 
-# Cleanup on exit.
 trap '
     kill ${SCRYD_PID:-0} 2>/dev/null || true
     wait ${SCRYD_PID:-0} 2>/dev/null || true
@@ -148,9 +166,8 @@ COUNT=0
 DEADLINE=$(($(date +%s) + 60))
 while [[ $(date +%s) -lt $DEADLINE ]]; do
     COUNT=$(sqlite3 /var/lib/scryd/meta.sqlite 'SELECT count(*) FROM messages' 2>/dev/null || echo 0)
-    # 50 primary + 50 secondary = 100 (each account fetches the same
-    # GreenMail INBOX since they're pointed at the same user). We just
-    # require >= 50 to confirm at least one account is indexing.
+    # 50 primary + 50 secondary = 100 (both fetch the same GreenMail INBOX). We
+    # only require >= 50 to confirm at least one account is indexing.
     if [[ "$COUNT" -ge 50 ]]; then
         break
     fi
@@ -167,11 +184,9 @@ if [[ "$COUNT" -lt 50 ]]; then
 fi
 note "indexed $COUNT messages"
 
-# v0.3.4: the drainer now embeds in producer cadence (flush after each
-# batch) instead of lazy-flushing on first search. Wait for the queue
-# to drain before searching, otherwise the search may legitimately
-# return zero hits if witchcraft hasn't caught up yet.
-note "polling /var/lib/scryd/meta.sqlite index_queue for drain completion"
+# The drainer flushes after each batch; wait for the queue to drain before
+# searching so witchcraft has caught up and search can return hits.
+note "polling index_queue for drain completion"
 QUEUE=$(sqlite3 /var/lib/scryd/meta.sqlite 'SELECT count(*) FROM index_queue WHERE failed_permanent = 0' 2>/dev/null || echo 0)
 DEADLINE=$(($(date +%s) + 120))
 while [[ "$QUEUE" -gt 0 && $(date +%s) -lt $DEADLINE ]]; do
@@ -180,32 +195,22 @@ while [[ "$QUEUE" -gt 0 && $(date +%s) -lt $DEADLINE ]]; do
 done
 note "index_queue depth after drain wait: $QUEUE"
 
-note "running scryd search (open socket; no sudo needed)"
-HITS_OUT=$(XDG_RUNTIME_DIR=/run/scryd \
-    /usr/local/bin/scryd search "e2e" --limit 5 --json 2>&1 || true)
+note "waiting for the MCP server to advertise its tools"
+wait_for_mcp 120 || { KEEP_LOG=1; fail "MCP server did not advertise the search tool within 120s"; }
+
+note "search 'e2e' over MCP"
+HITS_OUT=$(python3 tests/mcp_client.py "$MCP_URL" search "e2e" --limit 5 2>&1 || true)
 echo "$HITS_OUT"
-
-if echo "$HITS_OUT" | grep -q '"hits"'; then
-    HIT_COUNT=$(echo "$HITS_OUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d.get("hits",[])))' 2>/dev/null || echo 0)
-    if [[ "$HIT_COUNT" -lt 1 ]]; then
-        KEEP_LOG=1
-        fail "scryd search returned 0 hits; expected >= 1"
-    fi
-    note "scryd search returned $HIT_COUNT hits"
-else
+HIT_COUNT=$(echo "$HITS_OUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d.get("hits",[])))' 2>/dev/null || echo 0)
+if [[ "$HIT_COUNT" -lt 1 ]]; then
     KEEP_LOG=1
-    fail "scryd search did not return JSON hits envelope: $HITS_OUT"
+    fail "MCP search returned 0 hits; expected >= 1 (out: $HITS_OUT)"
 fi
+note "MCP search returned $HIT_COUNT hits"
 
-note "filtering by --accounts secondary"
-SECONDARY_OUT=$(XDG_RUNTIME_DIR=/run/scryd \
-    /usr/local/bin/scryd search "e2e" --accounts secondary --limit 50 --json 2>&1 || true)
+note "narrowing search to account_ids=[secondary] over MCP"
+SECONDARY_OUT=$(python3 tests/mcp_client.py "$MCP_URL" search "e2e" --accounts secondary --limit 50 2>&1 || true)
 echo "$SECONDARY_OUT"
-
-if ! echo "$SECONDARY_OUT" | grep -q '"hits"'; then
-    KEEP_LOG=1
-    fail "secondary-filtered search returned no JSON envelope: $SECONDARY_OUT"
-fi
 SECONDARY_BAD=$(echo "$SECONDARY_OUT" | python3 -c '
 import sys, json
 d = json.load(sys.stdin)
@@ -213,48 +218,26 @@ print(sum(1 for h in d.get("hits", []) if h.get("account_id") and h["account_id"
 ' 2>/dev/null || echo unknown)
 if [[ "$SECONDARY_BAD" != "0" ]]; then
     KEEP_LOG=1
-    fail "secondary-filtered search returned hits with account_id != 'secondary' (count=$SECONDARY_BAD)"
+    fail "secondary-narrowed search returned hits with account_id != 'secondary' (count=$SECONDARY_BAD)"
 fi
-note "secondary-filter assertion passed"
+note "account narrowing assertion passed"
 
 note "killing daemon and restarting to prove witchcraft persistence"
 kill -TERM "$SCRYD_PID" 2>/dev/null || true
 wait "$SCRYD_PID" 2>/dev/null || true
-# Remove any socket file the prior daemon may have left behind so the
-# wait loop only succeeds against the new daemon's freshly-bound
-# socket, and not a stale path that lingers across the restart.
-rm -f /run/scryd/scryd.sock
 mv /tmp/scryd.log /tmp/scryd.log.pre-restart || true
 start_daemon
 
-# Wait for the new daemon to be ACCEPTING (the socket file can appear
-# well before witchcraft finishes loading the model; verify by
-# probing with a trivial search until it responds).
-DEADLINE=$(($(date +%s) + 90))
-DAEMON_READY=0
-while [[ $(date +%s) -lt $DEADLINE ]]; do
-    if [[ -S /run/scryd/scryd.sock ]]; then
-        if XDG_RUNTIME_DIR=/run/scryd /usr/local/bin/scryd search "ping" --limit 1 --json >/dev/null 2>&1; then
-            DAEMON_READY=1
-            break
-        fi
-    fi
-    sleep 0.5
-done
-[[ "$DAEMON_READY" -eq 1 ]] || { KEEP_LOG=1; fail "daemon did not accept searches within 90s after restart"; }
+note "waiting for MCP server after restart"
+wait_for_mcp 120 || { KEEP_LOG=1; fail "MCP server did not come back within 120s after restart"; }
 
 note "search after restart (no re-fetch needed)"
-POST_OUT=$(XDG_RUNTIME_DIR=/run/scryd \
-    /usr/local/bin/scryd search "e2e" --limit 5 --json 2>&1 || true)
+POST_OUT=$(python3 tests/mcp_client.py "$MCP_URL" search "e2e" --limit 5 2>&1 || true)
 echo "$POST_OUT"
-if ! echo "$POST_OUT" | grep -q '"hits"'; then
-    KEEP_LOG=1
-    fail "post-restart search did not return JSON envelope: $POST_OUT"
-fi
 POST_HITS=$(echo "$POST_OUT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d.get("hits",[])))' 2>/dev/null || echo 0)
 if [[ "$POST_HITS" -lt 1 ]]; then
     KEEP_LOG=1
     fail "post-restart search returned 0 hits; witchcraft persistence broken"
 fi
 
-echo "OK: e2e indexing + search round-trip + persistence + account_ids filter passed"
+echo "OK: e2e fetch + index + MCP search round-trip + persistence + account narrowing passed"

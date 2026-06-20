@@ -1,4 +1,4 @@
-Parent slice(s): [search-engine](../slices/search-engine.md), [multi-instance-isolation](../slices/multi-instance-isolation.md), [storage](../slices/storage.md), [imap-sync](../slices/imap-sync.md), [mime-and-markdown](../slices/mime-and-markdown.md), [api](../slices/api.md), [cli](../slices/cli.md), [build-and-packaging](../slices/build-and-packaging.md), [observability](../slices/observability.md)
+Parent slice(s): [search-engine](../slices/search-engine.md), [multi-instance-isolation](../slices/multi-instance-isolation.md), [storage](../slices/storage.md), [imap-sync](../slices/imap-sync.md), [mime-and-markdown](../slices/mime-and-markdown.md), [api](../slices/api.md), [cli](../slices/cli.md), [build-and-packaging](../slices/build-and-packaging.md), [observability](../slices/observability.md), [mcp](../slices/mcp.md)
 
 # scryd — Tasks
 
@@ -31,6 +31,14 @@ Parent slice(s): [search-engine](../slices/search-engine.md), [multi-instance-is
 | 24 | ops-systemd-unit-and-weights-fetcher| [24-ops-systemd-unit-and-weights-fetcher.md](24-ops-systemd-unit-and-weights-fetcher.md) | 16 | build-and-packaging                       |
 | 25 | ops-install-script                  | [25-ops-install-script.md](25-ops-install-script.md)          | 24            | build-and-packaging                                |
 | 26 | ops-ci-release-matrix               | [26-ops-ci-release-matrix.md](26-ops-ci-release-matrix.md)    | 25            | build-and-packaging                                |
+| 27 | scryd-mcp-crate-scaffold            | [27-scryd-mcp-crate-scaffold.md](27-scryd-mcp-crate-scaffold.md) | —          | mcp                                                |
+| 28 | scryd-mcp-account-scope             | [28-scryd-mcp-account-scope.md](28-scryd-mcp-account-scope.md) | 27           | mcp                                                |
+| 29 | scryd-mcp-read-tools                | [29-scryd-mcp-read-tools.md](29-scryd-mcp-read-tools.md)      | 28            | mcp                                                |
+| 30 | scryd-mcp-write-tools               | [30-scryd-mcp-write-tools.md](30-scryd-mcp-write-tools.md)    | 28            | mcp                                                |
+| 31 | scryd-mcp-streamable-http           | [31-scryd-mcp-streamable-http.md](31-scryd-mcp-streamable-http.md) | 29, 30  | mcp                                                |
+| 32 | scryd-runtime-mcp-serve             | [32-scryd-runtime-mcp-serve.md](32-scryd-runtime-mcp-serve.md) | 31           | mcp + multi-instance-isolation                     |
+| 33 | scryd-cli-mcp-client                | [33-scryd-cli-mcp-client.md](33-scryd-cli-mcp-client.md)      | 31            | mcp + cli                                          |
+| 34 | retire-scryd-api-and-docs           | [34-retire-scryd-api-and-docs.md](34-retire-scryd-api-and-docs.md) | 32, 33  | mcp + build-and-packaging                          |
 
 ## Dependency graph
 
@@ -111,6 +119,28 @@ The longest dependency chain is the daemon-runtime path:
 | imap-sync                   | 12, 13, 14, 15         |
 | multi-instance-isolation    | (16), (17)             |
 | api                         | (17), 18, 19           |
-| cli                         | 20, 21, 22, 23         |
+| cli                         | 20, 21, 22, 23, (33)   |
+| mcp                         | 27, 28, 29, 30, 31, (32), (33), (34) |
 
 Parenthesized tasks span multiple slices and are listed in each.
+
+## MCP surface (tasks 27–34)
+
+The `mcp` slice replaces the HTTP-over-Unix-socket `api` surface (tasks 17–19)
+and rewires the `cli` (tasks 20–23) onto an MCP server over loopback HTTP, scoped
+by a mandatory `USER_EMAIL`. These tasks supersede the UDS transport; the
+`scryd-api` crate is removed in task 34.
+
+```
+27 scryd-mcp-crate-scaffold
+   │
+   └─> 28 scryd-mcp-account-scope
+          ├─> 29 scryd-mcp-read-tools ──┐
+          └─> 30 scryd-mcp-write-tools ─┴─> 31 scryd-mcp-streamable-http
+                                              ├─> 32 scryd-runtime-mcp-serve ──┐
+                                              └─> 33 scryd-cli-mcp-client ─────┴─> 34 retire-scryd-api-and-docs
+```
+
+Critical path for this surface: `27 → 28 → {29,30} → 31 → {32,33} → 34` (6 deep).
+Tasks 29 and 30 parallelize after 28; 32 and 33 parallelize after 31.
+

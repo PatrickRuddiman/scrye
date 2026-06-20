@@ -7,7 +7,7 @@ members = [
     "crates/scryd-mime",
     "crates/scryd-search",
     "crates/scryd-imap",
-    "crates/scryd-api",
+    "crates/scryd-mcp",
     "crates/scryd-runtime",
     "crates/scryd-fetch-weights",
     "scryd",
@@ -17,7 +17,7 @@ members = [
 edition = "2021"
 rust-version = "1.78"
 license = "Apache-2.0"
-version = "0.3.7"
+version = "0.4.0"
 # scryd ships only via GitHub Releases; no crate is published to
 # crates.io. Marking the workspace `publish = false` matches that
 # distribution model and lets cargo-deny's `allow-wildcard-paths`
@@ -26,7 +26,6 @@ publish = false
 
 [workspace.dependencies]
 tokio = "1.40"
-axum = "0.7"
 rustls = "0.23"
 tokio-rustls = "0.26"
 webpki-roots = "0.26"
@@ -47,14 +46,13 @@ zeroize = "1"
 thiserror = "1"
 anyhow = "1"
 
-# dropbox/witchcraft is the production semantic search engine for scryd's
-# search-engine slice. Per build-and-packaging slice §3 Decision 2:
+# dropbox/witchcraft is the REQUIRED production semantic search engine for
+# scryd's search-engine slice. Per build-and-packaging slice §3 Decision 2:
 #   x86_64-linux:  features = ["t5-quantized","fbgemm","hybrid-dequant"]
 #   aarch64-linux: features = ["t5-quantized"]
 # Per-arch feature selection lives in target-conditional dep tables in
-# crates/scryd-search/Cargo.toml; this entry pins the revision only and
-# is brought in only when the `witchcraft-backend` feature is enabled
-# on scryd-search (default off).
+# crates/scryd-search/Cargo.toml; this entry pins the revision only. The
+# binding is compiled in unconditionally on Unix targets (no feature flag).
 witchcraft = { git = "https://github.com/dropbox/witchcraft", rev = "1370cd569c7a882815cc22169f52dc9aa195cda7", default-features = false }
 candle-core = { git = "https://github.com/huggingface/candle", rev = "5bd5618", default-features = false }
 

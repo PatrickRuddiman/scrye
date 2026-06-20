@@ -18,53 +18,44 @@ uuid = { version = "1", features = ["v5"] }
 scryd-storage = { path = "../scryd-storage" }
 scryd-log = { path = "../scryd-log" }
 
-# Witchcraft is the default production indexer. Per-arch / per-OS
-# features mirror build-and-packaging slice §3 Decision 2 + the
-# upstream README's recommended sets. Only Unix-y targets get the dep
-# — Windows ports are a v2 follow-up that will require a non-trivial
-# IPC + service-manager port anyway.
-#
-# Tests and dev builds that want a stub indexer can opt out with
-# `cargo build --no-default-features` / `cargo test --no-default-features`,
-# which falls back to InMemoryIndexer.
+# Witchcraft is the REQUIRED production indexer — semantic search is a
+# core feature of scryd, not an opt-in backend. Per-arch / per-OS
+# feature sets mirror build-and-packaging slice §3 Decision 2 + the
+# upstream README's recommended sets. The binding only resolves on
+# Unix targets (candle / fbgemm-rs are Linux/macOS-only for scryd's
+# purposes); a Windows port is a separate, non-trivial effort. On
+# Windows the deps are simply absent and `WitchcraftIndexer` is gated
+# out at the source level (see lib.rs), leaving the build clean for
+# unit-testing the storage/search traits with `InMemoryIndexer`.
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
-witchcraft = { workspace = true, optional = true, features = ["t5-quantized", "fbgemm", "hybrid-dequant"] }
-candle-core = { workspace = true, optional = true }
+witchcraft = { workspace = true, features = ["t5-quantized", "fbgemm", "hybrid-dequant"] }
+candle-core = { workspace = true }
 
 [target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
-witchcraft = { workspace = true, optional = true, features = ["t5-quantized"] }
-candle-core = { workspace = true, optional = true }
+witchcraft = { workspace = true, features = ["t5-quantized"] }
+candle-core = { workspace = true }
 
 # Apple Silicon: t5-quantized + metal (witchcraft README's recommended
 # Apple Silicon set).
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-witchcraft = { workspace = true, optional = true, features = ["t5-quantized", "metal"] }
-candle-core = { workspace = true, optional = true }
+witchcraft = { workspace = true, features = ["t5-quantized", "metal"] }
+candle-core = { workspace = true }
 
 # Intel Mac: t5-quantized + fbgemm + hybrid-dequant (witchcraft
 # README's recommended Intel Mac set).
 [target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
-witchcraft = { workspace = true, optional = true, features = ["t5-quantized", "fbgemm", "hybrid-dequant"] }
-candle-core = { workspace = true, optional = true }
-
-[features]
-default = ["witchcraft-backend"]
-# Pull in the dropbox/witchcraft binding. Compiles candle-core +
-# fbgemm-rs (x86_64) or candle-core only (aarch64); first build is
-# slow but cached afterwards. On non-Linux hosts the feature flag is
-# inert because the witchcraft + candle-core deps only resolve under
-# the Linux target tables above.
-witchcraft-backend = ["dep:witchcraft", "dep:candle-core"]
+witchcraft = { workspace = true, features = ["t5-quantized", "fbgemm", "hybrid-dequant"] }
+candle-core = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "json"] }
 tempfile = "3"
 
-# The witchcraft integration test only builds when the upstream binding
-# is wired in. Without `required-features` cargo would try to compile
-# the test against unresolved imports.
+# The witchcraft integration test only compiles where the upstream
+# binding resolves (Linux/macOS); the test file itself is gated with
+# `#![cfg(any(target_os = "linux", target_os = "macos"))]` so it's an
+# empty compilation unit on other hosts.
 [[test]]
 name = "witchcraft"
 path = "tests/witchcraft.rs"
-required-features = ["witchcraft-backend"]

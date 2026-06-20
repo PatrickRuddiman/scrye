@@ -12,14 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util"] }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-anyhow = { workspace = true }
-thiserror = { workspace = true }
-scryd-config = { path = "../crates/scryd-config" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 scryd-runtime = { path = "../crates/scryd-runtime" }
-scryd-log = { path = "../crates/scryd-log" }
 # Direct rustls dep so `main()` can install the aws-lc-rs crypto
 # provider at process startup. Workspace feature unification with
 # `scryd-fetch-weights` (which pulls reqwest's rustls-tls path,
@@ -31,16 +25,5 @@ rustls = { workspace = true }
 # (num_cpus − 2). candle (via witchcraft) pulls rayon transitively
 # and uses it for its embed pass; without an explicit cap, the
 # default pool size of `available_parallelism()` pegs all cores
-# during backfill and starves the IMAP supervisor + UDS server.
+# during backfill and starves the IMAP supervisor + MCP server.
 rayon = "1"
-urlencoding = "2"
-is-terminal = "0.4"
-toml_edit = { workspace = true }
-rpassword = { workspace = true }
-regex = "1"
-nix = { version = "0.29", default-features = false, features = ["user", "fs"] }
-
-[dev-dependencies]
-assert_cmd = "2"
-predicates = "3"
-tempfile = "3"

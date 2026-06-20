@@ -1,19 +1,19 @@
 # Installing scryd
 
-scryd ships as a Linux system service (v0.3.x service shape). The installer creates a
-dedicated `scryd` Linux user, installs the binary at
-`/usr/local/bin/scryd`, lays down the systemd unit, and (unless
-`--skip-weights` is passed) downloads the witchcraft asset bundle on
-behalf of the daemon. The HTTP-over-UDS search API is open by default
-— anyone who can reach `/run/scryd/scryd.sock` can query the full
-index. The consumer's higher-layer API service is the auth boundary;
-it authenticates end-users and passes a per-user `account_ids` filter
-on every search call.
+scryd is a single-purpose Linux daemon. It fetches the IMAP mailbox whose login
+matches the mandatory `USER_EMAIL`, indexes it with witchcraft, and serves search
+over an **MCP server on loopback TCP** (`127.0.0.1:7878` by default). There is no
+CLI client and no other control surface — the MCP server is the only way in, and
+every response is scoped to `USER_EMAIL`.
+
+The installer creates a dedicated `scryd` Linux user, installs the binary at
+`/usr/local/bin/scryd`, lays down the systemd unit, and (unless `--skip-weights`
+is passed) downloads the witchcraft asset bundle on the daemon's behalf.
 
 ## Quick install
 
-Download the per-arch tarball from GitHub Releases (`x86_64-linux`
-or `aarch64-linux`), extract, and run the installer with sudo:
+Download the per-arch tarball from GitHub Releases (`x86_64-linux` or
+`aarch64-linux`), extract, and run the installer with sudo:
 
 ```sh
 tar -xzf scryd-vX.Y.Z-x86_64-linux.tar.gz
@@ -21,10 +21,10 @@ cd scryd-vX.Y.Z-x86_64-linux
 sudo ./install.sh
 ```
 
-`install.sh` is non-interactive and idempotent. Re-running it after
-an upgrade replaces the binary and unit file but preserves
-`/etc/scryd/config.toml`, `/var/lib/scryd/meta.sqlite`,
-`/var/lib/scryd/witchcraft.sqlite`, and `/var/lib/scryd/assets/`.
+`install.sh` is non-interactive and idempotent. Re-running it after an upgrade
+replaces the binary and unit file but preserves `/etc/scryd/config.toml`,
+`/var/lib/scryd/meta.sqlite`, `/var/lib/scryd/witchcraft.sqlite`, and
+`/var/lib/scryd/assets/`.
 
 Flags (both test-only):
 
@@ -37,15 +37,12 @@ Flags (both test-only):
 
 | Artifact | Owner | Mode | Notes |
 |---|---|---|---|
-| `/usr/local/bin/scryd` | root:root | 0755 | daemon + CLI binary |
+| `/usr/local/bin/scryd` | root:root | 0755 | the daemon binary (no subcommands) |
 | `/usr/local/bin/scryd-fetch-weights` | root:root | 0755 | asset-bundle downloader |
-| `/etc/scryd/config.toml` | scryd:scryd | 0640 | IMAP accounts; group `scryd` can read, world cannot |
+| `/etc/scryd/config.toml` | scryd:scryd | 0640 | IMAP account; group `scryd` can read, world cannot |
 | `/var/lib/scryd/` | scryd:scryd | 0700 | meta DB + witchcraft index |
 | `/var/lib/scryd/assets/` | scryd:scryd | 0755 | xtr asset bundle (mmap-readable) |
-| `/run/scryd/` | scryd:scryd | 0755 | runtime dir; provisioned by tmpfiles.d at boot |
-| `/run/scryd/scryd.sock` | scryd:scryd | 0666 | API socket (mode is `[server] socket_mode` configurable) |
-| `/etc/systemd/system/scryd.service` | root:root | 0644 | rendered from `scryd.service.in` |
-| `/etc/tmpfiles.d/scryd.conf` | root:root | 0644 | rendered from `scryd.tmpfiles.in` |
+| `/etc/systemd/system/scryd.service` | root:root | 0644 | the unit (no socket, no tmpfiles) |
 
 ## Service posture (what scryd defends, what it doesn't)
 
@@ -53,177 +50,133 @@ Flags (both test-only):
 |---|---|
 | `open("/etc/scryd/config.toml")` from a UID not in group `scryd` | EACCES (mode 0640) |
 | `open("/etc/scryd/config.toml")` from a UID in group `scryd` | OK — the credential is readable to group members by design |
-| `connect("/run/scryd/scryd.sock")` from any local UID | OK by default (mode 0666); see hardening below |
+| `connect("127.0.0.1:7878")` from another local process | OK — v1 has no per-caller auth; the host is the trust boundary |
+| `connect()` from off-host | refused — the MCP listener is loopback-only and rejects routable binds |
 | `read("/var/lib/scryd/...")` from a UID not in group `scryd` | EACCES (mode 0700) |
 | `ptrace(scryd_pid)` from a UID other than `scryd` | EPERM (different UID, YAMA blocks) |
 
-**The search API has no auth.** That's the design: the consumer's
-higher-layer API authenticates end-users and passes a per-user
-`?account_ids=a,b,c` filter on every search call. Empty filter =
-all accounts visible to the daemon.
+**The boundary is `USER_EMAIL` + loopback.** The daemon serves a single mailbox
+to local MCP clients; it does not authenticate callers. Keep it on a host where
+you trust the local processes, and don't expose `127.0.0.1:7878` to a network. See
+[`docs/security.md`](../docs/security.md) for the full threat model.
 
-To tighten the socket, edit `/etc/scryd/config.toml` and set either:
+## Configure the mailbox
 
-```toml
-[server]
-socket_mode = 0o660       # restrict to group `scryd` (place
-                          # consumer's UID in that group)
-# or:
-require_peer_uid = true   # only the daemon's own UID can connect
-                          # (v0.2.0's peercred behaviour, opt-in)
+scryd serves the mailbox named by `USER_EMAIL`, so you must set it **and** add a
+matching `[[accounts]]` entry whose `user` equals that address.
+
+1. Set `USER_EMAIL` on the unit (mandatory — the daemon won't start until you do):
+
+   ```sh
+   sudo systemctl edit scryd
+   # add under [Service]:
+   #   Environment=USER_EMAIL=alice@example.com
+   ```
+
+2. Hand-edit `/etc/scryd/config.toml` (owned by `scryd:scryd`, mode 0640):
+
+   ```toml
+   [[accounts]]
+   id = "primary"
+   host = "imap.example.com"
+   port = 993
+   user = "alice@example.com"   # must equal USER_EMAIL
+   password = "..."
+   tls = true
+   folders = ["INBOX"]
+   # optional per-account custom CA for self-signed corporate IMAP:
+   # tls_ca_path = "/etc/scryd/work-ca.pem"
+
+   # optional: override the loopback MCP bind (default 127.0.0.1:7878)
+   # [server]
+   # mcp_bind = "127.0.0.1:7878"
+   ```
+
+   `port` defaults are not applied for you — set `993` for implicit-TLS IMAP.
+   `id` must match `^[a-z0-9_-]+$`. The CA PEM, if used, must be readable by the
+   `scryd` user. There is no `add-account` command: the config file is the only
+   way to declare the account, and the daemon reads it at start.
+
+3. Start it:
+
+   ```sh
+   sudo systemctl restart scryd
+   journalctl -u scryd -f
+   ```
+
+   Editing the config and restarting is the supported way to change accounts or
+   TLS settings; the unit has no `ExecReload` and there is no socket/CLI reconcile
+   path.
+
+## Connect an MCP client
+
+Point any MCP client (Claude Desktop, an agent framework, your own code) at the
+Streamable-HTTP endpoint:
+
+```
+http://127.0.0.1:7878/mcp
 ```
 
-Then `sudo systemctl restart scryd`.
+It advertises six read-only tools: `search`, `get_message`, `get_raw_message`,
+`get_thread`, `list_accounts`, `status`. Fetching and indexing happen
+automatically inside the daemon — there are no sync/reindex/add-account tools and
+no write surface.
 
-## First account configuration
-
-Interactive:
+A minimal stdlib MCP client used by the e2e test lives at
+[`tests/mcp_client.py`](../tests/mcp_client.py); it's a handy way to poke the
+server from a shell:
 
 ```sh
-sudo scryd add-account
+python3 tests/mcp_client.py http://127.0.0.1:7878/mcp tools
+python3 tests/mcp_client.py http://127.0.0.1:7878/mcp search "annual invoice from acme" --limit 10
 ```
 
-The CLI prompts for IMAP host / port / user / password / folders;
-writes them into `/etc/scryd/config.toml` and POSTs
-`/internal/reconcile` so the daemon picks up the change without a
-restart. If the daemon isn't running yet, the CLI prints
-`apply changes: sudo systemctl start scryd`.
+## The `status` tool — readiness contract
 
-Non-interactive (provisioning):
+`status` is the readiness and progress probe. Its structured result has the shape:
 
-```sh
-printf '%s' "$IMAP_PASSWORD" | sudo scryd add-account \
-    --account-id work \
-    --host imap.example.com \
-    --port 993 \
-    --user alice@example.com \
-    --password-stdin \
-    --folders INBOX,Archive
+```json
+{
+  "ok": true,
+  "uptime_secs": 1234,
+  "accounts": [
+    {
+      "account_id": "primary",
+      "folders": ["INBOX"],
+      "health": "Healthy",
+      "last_sync_unix": 1731600000,
+      "last_seen_uid": 4271
+    }
+  ]
+}
 ```
 
-`--port` defaults to `993`; `--folders` defaults to `INBOX`.
-`--account-id` must match `^[a-z0-9_-]+$`. The verb is upsert-
-semantic on the id: re-running with the same `--account-id`
-overwrites the existing entry, so provisioning scripts and AI
-agents can call it unconditionally without checking first.
-
-The minimal hand-edited config:
-
-```toml
-[[accounts]]
-id = "work"
-host = "imap.example.com"
-port = 993
-user = "alice@example.com"
-password = "..."
-tls = true
-folders = ["INBOX"]
-# optional per-account custom CA for self-signed corporate IMAP.
-# tls_ca_path = "/etc/scryd/work-ca.pem"
-```
-
-## Daily use
-
-Reads (socket is 0666 by default; no sudo needed):
-
-```sh
-scryd search "lunch with bob since:2026-01-01"
-scryd search "contract terms" --accounts work,personal --json
-scryd reindex
-scryd sync
-scryd status
-```
-
-Mutations (sudo because only scryd:scryd can write the config; each
-auto-reconciles via `/internal/reconcile` so no restart is needed):
-
-```sh
-sudo scryd add-account
-sudo scryd rotate-password <account-id>
-sudo scryd remove-account <account-id>
-```
-
-## `scryd status` output contract
-
-`scryd status` is the readiness and progress probe — provisioning
-scripts and agents lean on it. The contract:
-
-- **Exit 0** iff the daemon is reachable on `/run/scryd/scryd.sock`.
-  Non-zero means the daemon isn't running, the socket isn't mode-
-  reachable from the calling UID, or the HTTP call returned a non-2xx.
-- **Stdout is JSON** with shape:
-
-  ```json
-  {
-    "ok": true,
-    "uptime_secs": 1234,
-    "accounts": [
-      {
-        "account_id": "work",
-        "folders": ["INBOX"],
-        "health": "Healthy",
-        "last_sync_unix": 1731600000,
-        "last_seen_uid": 4271
-      }
-    ]
-  }
-  ```
-
-  `last_seen_uid` is `null` until the IMAP supervisor has fetched at
-  least one message from the primary folder. `last_sync_unix` is
-  `null` until the first complete sync pass finishes. `accounts` is
-  empty if no `[[accounts]]` are configured or the daemon hasn't
-  picked up a freshly-reconciled config yet.
-
-No `--json` flag exists because the body is JSON by default — pipe
-straight into `jq` or `python3 -m json.tool`.
-
-## TLS to corporate / self-signed IMAP servers
-
-`tls_ca_path` is **config-only** — `scryd add-account` does not
-accept a `--tls-ca-path` flag. For self-signed corporate IMAP, run
-`add-account` first, then hand-edit `/etc/scryd/config.toml` to add
-the field on the `[[accounts]]` block:
-
-```toml
-[[accounts]]
-id = "work"
-host = "imap.example.com"
-port = 993
-user = "alice@example.com"
-password = "..."
-tls = true
-folders = ["INBOX"]
-tls_ca_path = "/etc/scryd/work-ca.pem"
-```
-
-Then `sudo systemctl restart scryd` (the unit has no `ExecReload`,
-and hand-edits don't trigger the `/internal/reconcile` path that
-the CLI verbs use). The CA PEM must be readable by the `scryd`
-user.
+`last_seen_uid` is `null` until the IMAP supervisor has fetched at least one
+message from the primary folder. `last_sync_unix` is `null` until the first
+complete sync pass finishes. `accounts` is empty if no matching `[[accounts]]` is
+configured (or none matches `USER_EMAIL`). `ok` is `false` while the daemon is in
+crash-loop backoff (issue #20), so a chatty restart loop stays visible instead of
+masquerading as healthy.
 
 ## Witchcraft asset bundle
 
-On first start the daemon checks `/var/lib/scryd/assets/` for
-`config.json`, `tokenizer.json`, and `xtr.gguf`. If any are missing
-it spawns `scryd-fetch-weights`, which downloads the tarball baked
-into the binary at compile time (~61 MB), verifies its SHA-256, and
-extracts the three files. Re-running the helper when all three are
-present is a no-op.
+On first start the daemon checks `/var/lib/scryd/assets/` for `config.json`,
+`tokenizer.json`, and `xtr.gguf`. If any are missing it spawns
+`scryd-fetch-weights`, which downloads the tarball baked into the binary at
+compile time (~61 MB), verifies its SHA-256, and extracts the three files.
+Re-running the helper when all three are present is a no-op.
 
-The bundle is produced by the `witchcraft-assets` GitHub workflow
-against a pinned `dropbox/witchcraft` revision (see the workflow
-file for which one) and published as a github release tagged
+The bundle is produced by the `witchcraft-assets` GitHub workflow against a
+pinned `dropbox/witchcraft` revision and published as a github release tagged
 `witchcraft-assets-<short-rev>`.
 
-For air-gapped installs: pre-stage the three files under
-`/var/lib/scryd/assets/` (owned by scryd:scryd, mode 0644) and the
-fetcher's existence check short-circuits.
+For air-gapped installs: pre-stage the three files under `/var/lib/scryd/assets/`
+(owned by scryd:scryd, mode 0644) and the fetcher's existence check
+short-circuits.
 
 ## Logs
 
-scryd is a system unit, so the journal is the system journal — no
-`--user` flag.
+scryd is a system unit, so the journal is the system journal — no `--user` flag.
 
 ```sh
 # live tail
@@ -243,10 +196,9 @@ journalctl -u scryd --output json \
 sudo ./uninstall.sh
 ```
 
-Removes the system service, unit file, tmpfiles drop-in, the FHS
-directory tree (`/etc/scryd`, `/var/lib/scryd`, `/run/scryd`), the
-binaries, and the `scryd` Linux account. Idempotent: a second run
-prints `nothing was installed`.
+Removes the system service, unit file, the FHS directory tree (`/etc/scryd`,
+`/var/lib/scryd`), the binaries, and the `scryd` Linux account. Idempotent: a
+second run prints `nothing was installed`.
 
 ## Upgrade
 
@@ -256,14 +208,13 @@ Re-run the installer:
 sudo ./install.sh
 ```
 
-The binary and unit are replaced; `/etc/scryd/config.toml`,
-`/var/lib/scryd/`, the witchcraft index at
-`/var/lib/scryd/witchcraft.sqlite`, and the asset bundle at
-`/var/lib/scryd/assets/` are preserved. systemd restarts the daemon
-on the unit reload.
+The binary and unit are replaced; `/etc/scryd/config.toml`, `/var/lib/scryd/`,
+the witchcraft index at `/var/lib/scryd/witchcraft.sqlite`, and the asset bundle
+at `/var/lib/scryd/assets/` are preserved. systemd restarts the daemon on the
+unit reload.
 
 ## glibc requirement
 
 Release tarballs require glibc 2.34 or newer (Ubuntu 22.04+, Debian 12+,
-Fedora 36+, Arch). On older distros, build from source against your
-local toolchain.
+Fedora 36+, Arch). On older distros, build from source against your local
+toolchain.
