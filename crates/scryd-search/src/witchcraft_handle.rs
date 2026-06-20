@@ -1,6 +1,7 @@
-//! Production binding to dropbox/witchcraft. Gated behind the
-//! `witchcraft-backend` feature flag so the default workspace build
-//! stays cheap.
+//! Production binding to dropbox/witchcraft. Compiled in on every Unix
+//! (Linux/macOS) target — semantic search is a required core feature,
+//! not an opt-in backend. Only absent on non-Unix hosts where the
+//! upstream toolchain (candle, fbgemm-rs) does not resolve.
 //!
 //! Structure:
 //!   - One [`witchcraft::DB`] (rusqlite Connection inside) plus one

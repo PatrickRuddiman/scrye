@@ -243,8 +243,7 @@ fn load_accepts_group_readable_config() {
 fn server_table_defaults_when_absent() {
     let f = write_config(MIN_VALID);
     let cfg = Config::load(f.path()).expect("loads");
-    assert!(!cfg.server.require_peer_uid);
-    assert_eq!(cfg.server.socket_mode, 0o666);
+    assert_eq!(cfg.server.mcp_bind, "127.0.0.1:7878");
 }
 
 #[test]
@@ -252,8 +251,7 @@ fn server_table_explicit_values_round_trip() {
     let f = write_config(
         r#"
 [server]
-require_peer_uid = true
-socket_mode = 0o660
+mcp_bind = "127.0.0.1:9000"
 
 [[accounts]]
 id = "primary"
@@ -264,8 +262,7 @@ password = "hunter2"
 "#,
     );
     let cfg = Config::load(f.path()).expect("loads");
-    assert!(cfg.server.require_peer_uid);
-    assert_eq!(cfg.server.socket_mode, 0o660);
+    assert_eq!(cfg.server.mcp_bind, "127.0.0.1:9000");
 }
 
 #[test]

@@ -15,7 +15,7 @@ use tracing_subscriber::EnvFilter;
 pub use categories::{category, kind};
 
 /// Default tracing-env filter applied when `RUST_LOG` is unset.
-pub const DEFAULT_FILTER: &str = "scryd=info,scryd_api=info,scryd_imap=info,scryd_search=info,scryd_storage=info,scryd_mime=info,scryd_runtime=info,warn";
+pub const DEFAULT_FILTER: &str = "scryd=info,scryd_mcp=info,scryd_imap=info,scryd_search=info,scryd_storage=info,scryd_mime=info,scryd_runtime=info,warn";
 
 #[derive(Debug, thiserror::Error)]
 pub enum InitError {

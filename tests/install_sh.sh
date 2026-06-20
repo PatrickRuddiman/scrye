@@ -2,9 +2,9 @@
 # Privileged smoke test for ops/install.sh and ops/uninstall.sh.
 #
 # Re-launches itself inside a debian:bookworm Docker container with
-# --privileged (needed for systemd-tmpfiles + useradd to behave like
-# they would on a real host). Inside the container, runs five
-# scenarios end-to-end against the v0.2.0 system installer.
+# --privileged (needed for useradd to behave like it would on a real
+# host). Inside the container, runs four scenarios end-to-end against
+# the system installer.
 
 set -euo pipefail
 
@@ -36,7 +36,6 @@ BUNDLE="$(mktemp -d)"
 cp ops/install.sh "$BUNDLE/install.sh"
 cp ops/uninstall.sh "$BUNDLE/uninstall.sh"
 cp ops/scryd.service.in "$BUNDLE/scryd.service.in"
-cp ops/scryd.tmpfiles.in "$BUNDLE/scryd.tmpfiles.in"
 cp LICENSE "$BUNDLE/LICENSE"
 chmod +x "$BUNDLE/install.sh" "$BUNDLE/uninstall.sh"
 
@@ -69,18 +68,22 @@ own=$(stat -c '%U:%G %a' /var/lib/scryd)
 [[ "$own" == "scryd:scryd 700" ]] || fail "scenario 1: /var/lib/scryd ownership/mode '$own' != 'scryd:scryd 700'"
 
 [[ -e /etc/systemd/system/scryd.service ]] || fail "scenario 1: scryd.service missing"
-[[ -e /etc/tmpfiles.d/scryd.conf ]] || fail "scenario 1: scryd.conf tmpfiles drop-in missing"
-
-[[ -d /run/scryd ]] || fail "scenario 1: /run/scryd missing"
-own=$(stat -c '%U:%G %a' /run/scryd)
-[[ "$own" == "scryd:scryd 755" ]] || fail "scenario 1: /run/scryd ownership/mode '$own' != 'scryd:scryd 755'"
 
 grep -q '^User=scryd$' /etc/systemd/system/scryd.service || fail "scenario 1: unit missing User=scryd"
-! grep -q 'SCRYD_ALLOWED_UID' /etc/systemd/system/scryd.service || \
-    fail "scenario 1: v0.3.1 unit must NOT carry SCRYD_ALLOWED_UID env var"
+# Daemon-only entrypoint: ExecStart must invoke the bare binary (no `serve`
+# subcommand — the CLI surface is gone) and declare the mandatory USER_EMAIL
+# scope knob.
+grep -q '^ExecStart=/usr/local/bin/scryd$' /etc/systemd/system/scryd.service || \
+    fail "scenario 1: unit ExecStart must be the bare 'scryd' daemon (no subcommand)"
+grep -q '^Environment=USER_EMAIL=' /etc/systemd/system/scryd.service || \
+    fail "scenario 1: unit missing Environment=USER_EMAIL= scope knob"
+! grep -q 'XDG_RUNTIME_DIR' /etc/systemd/system/scryd.service || \
+    fail "scenario 1: MCP daemon must NOT carry XDG_RUNTIME_DIR (no socket)"
+! grep -q 'scryd.sock' /etc/systemd/system/scryd.service || \
+    fail "scenario 1: MCP daemon must NOT reference a Unix socket"
 
-# ---------- Scenario 2: Open API + cred-file isolation ----------
-note "scenario 2: search api open; config still daemon-owned"
+# ---------- Scenario 2: config cred-file isolation ----------
+note "scenario 2: config is daemon-owned and unreadable by other users"
 # alice and mallory are both NOT in the scryd group: neither can
 # read /etc/scryd/config.toml (mode 0640 scryd:scryd).
 if su mallory -c 'cat /etc/scryd/config.toml' 2>/tmp/mallory.err; then
@@ -94,12 +97,6 @@ if su alice -c 'cat /etc/scryd/config.toml' 2>/tmp/alice.err; then
 fi
 grep -q "Permission denied" /tmp/alice.err || \
     fail "scenario 2: alice's read failed but stderr didn't say 'Permission denied': $(cat /tmp/alice.err)"
-
-# The runtime dir is mode 0755 in v0.3.1 — anyone can list it (open
-# service shape). The socket isn't bound (no daemon running in the
-# smoke), so we just confirm the directory itself permits group-read.
-own=$(stat -c '%a' /run/scryd)
-[[ "$own" == "755" ]] || fail "scenario 2: /run/scryd mode '$own' != 755 (open service)"
 
 # ---------- Scenario 3: re-install idempotency ----------
 note "scenario 3: re-install preserves config"
@@ -130,7 +127,6 @@ note "scenario 4: uninstall round-trip"
 [[ ! -e /etc/systemd/system/scryd.service ]] || fail "scenario 4: scryd.service still present"
 [[ ! -e /etc/scryd ]] || fail "scenario 4: /etc/scryd still present"
 [[ ! -e /var/lib/scryd ]] || fail "scenario 4: /var/lib/scryd still present"
-[[ ! -e /run/scryd ]] || fail "scenario 4: /run/scryd still present"
 [[ ! -e /usr/local/bin/scryd ]] || fail "scenario 4: /usr/local/bin/scryd still present"
 [[ -z "$(getent passwd scryd || true)" ]] || fail "scenario 4: scryd user not deleted"
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Uninstaller for scryd v0.2.0.
+# Uninstaller for scryd.
 #
 # Removes everything install.sh produces — the system service, unit
-# file, tmpfiles drop-in, FHS directory tree, binaries, and the
-# `scryd` Linux account. Idempotent: a second run after a clean
-# uninstall succeeds with "nothing was installed".
+# file, FHS directory tree, binaries, and the `scryd` Linux account.
+# Idempotent: a second run after a clean uninstall succeeds with
+# "nothing was installed".
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ if systemctl status scryd >/dev/null 2>&1 || \
     removed=$((removed + 1))
 fi
 
-for f in /etc/systemd/system/scryd.service /etc/tmpfiles.d/scryd.conf \
+for f in /etc/systemd/system/scryd.service \
          /usr/local/bin/scryd /usr/local/bin/scryd-fetch-weights; do
     if [[ -e "$f" ]]; then
         removed=$((removed + 1))
@@ -30,12 +30,12 @@ done
 rm -f /etc/systemd/system/scryd.service /etc/tmpfiles.d/scryd.conf
 rm -f /usr/local/bin/scryd /usr/local/bin/scryd-fetch-weights
 
-for d in /etc/scryd /var/lib/scryd /run/scryd; do
+for d in /etc/scryd /var/lib/scryd; do
     if [[ -e "$d" ]]; then
         removed=$((removed + 1))
     fi
 done
-rm -rf /etc/scryd /var/lib/scryd /run/scryd
+rm -rf /etc/scryd /var/lib/scryd
 
 if getent passwd scryd >/dev/null; then
     userdel scryd 2>/dev/null || true

@@ -1,6 +1,6 @@
 //! Daemon-startup self-checks. Validates the per-user filesystem layout
 //! the multi-instance-isolation slice's §3 Decision 9 enumerates before
-//! any tokio runtime, sqlite open, or socket bind happens.
+//! any tokio runtime or sqlite open happens.
 
 use std::path::{Path, PathBuf};
 
@@ -12,7 +12,6 @@ use crate::RuntimeError;
 /// Resolved paths the daemon's serve loop consumes after preflight passes.
 #[derive(Debug, Clone)]
 pub struct PreflightOk {
-    pub runtime_dir: PathBuf,
     pub config_path: PathBuf,
     pub data_dir: PathBuf,
     pub assets_dir: PathBuf,
@@ -22,18 +21,9 @@ pub struct PreflightOk {
 /// `configuration permission error` event tagged with the offending path
 /// and exits non-zero through the `?`-propagated error.
 pub fn run() -> Result<PreflightOk, RuntimeError> {
-    let runtime = xdg::runtime_dir()?;
     let config = xdg::config_path()?;
     let data = xdg::data_dir()?;
     let assets = xdg::assets_dir()?;
-
-    // The runtime dir's parent ($XDG_RUNTIME_DIR) is what we audit; the
-    // socket subdir is created at bind time. We just assert it exists;
-    // mode/owner is the operator's choice (v0.3.1 ships 0755 scryd:scryd).
-    let runtime_parent = runtime
-        .parent()
-        .ok_or_else(|| RuntimeError::UnresolvableXdgPath("runtime_dir parent"))?;
-    assert_dir_exists(runtime_parent, "runtime dir parent")?;
 
     // Config file: must exist and not be world-readable. v0.3.1 ships
     // `scryd:scryd 0640` so members of group `scryd` can read it, the
@@ -53,31 +43,10 @@ pub fn run() -> Result<PreflightOk, RuntimeError> {
     assert_dir(&data, 0o700, "data dir")?;
 
     Ok(PreflightOk {
-        runtime_dir: runtime,
         config_path: config,
         data_dir: data,
         assets_dir: assets,
     })
-}
-
-fn assert_dir_exists(path: &Path, label: &str) -> Result<(), RuntimeError> {
-    let meta = std::fs::metadata(path).map_err(|e| {
-        log_failure!(
-            category = category::CONFIG_PERMISSION_ERROR,
-            path = %path.display(),
-            error = %e,
-            label = label
-        );
-        RuntimeError::Io(e)
-    })?;
-    if !meta.is_dir() {
-        let reason = format!("{label}: not a directory");
-        return Err(RuntimeError::PermissionInvariant {
-            path: path.to_path_buf(),
-            reason,
-        });
-    }
-    Ok(())
 }
 
 #[cfg(unix)]

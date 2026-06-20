@@ -144,7 +144,7 @@ jobs:
           - tokenizer.json
           - xtr.gguf
 
-          Scryd's daemon expects these three files in \`/var/lib/scryd/assets/\` (the install-script-staged location) before \`scryd serve\` is started.
+          Scryd's daemon expects these three files in \`/var/lib/scryd/assets/\` (the install-script-staged location) before the scryd daemon starts.
           EOF
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$TARBALL" "$SHA_FILE" --clobber

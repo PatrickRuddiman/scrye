@@ -1,0 +1,37 @@
+[package]
+name = "scryd-mcp"
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+# The official MCP Rust SDK. rmcp 1.7 pulls axum 0.8 / hyper 1 / tokio-util 0.7
+# transitively; this crate depends on axum 0.8 directly to match.
+rmcp = { version = "1.7", features = [
+    "server",
+    "macros",
+    "schemars",
+    "transport-streamable-http-server",
+] }
+axum = "0.8"
+tokio = { workspace = true, features = ["full"] }
+tokio-util = "0.7"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+schemars = "1"
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+scryd-storage = { path = "../scryd-storage" }
+scryd-search = { path = "../scryd-search" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tempfile = "3"
+# The reqwest-based Streamable-HTTP *client* transport, used by the round-trip
+# integration test to drive the server like a real MCP client.
+rmcp = { version = "1.7", features = ["client", "transport-streamable-http-client-reqwest"] }

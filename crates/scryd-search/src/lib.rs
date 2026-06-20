@@ -3,16 +3,15 @@
 //! `SearchResponse`) that downstream tasks build against.
 //!
 //! Two backends ship:
-//!   - [`WitchcraftIndexer`] — the production indexer, backed by
-//!     `dropbox/witchcraft`. Default. Only pulled in on Linux targets
-//!     because the upstream toolchain (candle, fbgemm-rs) is Linux-only
-//!     for scryd's purposes. Activate the `witchcraft-backend` feature
-//!     explicitly to be sure; it's on by default.
-//!   - [`InMemoryIndexer`] — a test stub. Available unconditionally;
-//!     callers that want it instead of witchcraft (unit tests, dev
-//!     workflows on non-Linux hosts) can either depend on this crate
-//!     `default-features = false` or instantiate `InMemoryIndexer`
-//!     directly even when the witchcraft feature is on.
+//!   - [`WitchcraftIndexer`] — the required production indexer, backed by
+//!     `dropbox/witchcraft`. Compiled in on every Unix target (Linux +
+//!     macOS), since the upstream toolchain (candle, fbgemm-rs) is
+//!     Unix-only for scryd's purposes. There is no feature flag: semantic
+//!     search is a core feature, not opt-in.
+//!   - [`InMemoryIndexer`] — a test stub. Available unconditionally so unit
+//!     tests (and dev work on non-Unix hosts where the witchcraft binding
+//!     is absent) can exercise the storage/search traits without the heavy
+//!     ML backend.
 
 pub mod document;
 pub mod drainer;
@@ -23,13 +22,10 @@ pub mod snippet;
 
 // The witchcraft binding only resolves on Linux + macOS targets
 // (per the target-conditional deps in Cargo.toml). On other hosts
-// (Windows dev boxes) the feature flag is still on but the deps
-// are absent — gate the module on the same target predicate so the
-// workspace builds cleanly everywhere.
-#[cfg(all(
-    feature = "witchcraft-backend",
-    any(target_os = "linux", target_os = "macos")
-))]
+// (Windows dev boxes) the deps are absent — gate the module on the
+// same target predicate so the workspace still type-checks there
+// against `InMemoryIndexer`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod witchcraft_handle;
 
 use serde::{Deserialize, Serialize};
@@ -130,8 +126,6 @@ pub struct SearchResponse {
 
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
-    #[error("witchcraft binding not yet wired up; enable feature `witchcraft-backend` and complete the upstream integration")]
-    BackendNotImplemented,
     #[error("upstream witchcraft error: {0}")]
     Upstream(String),
     #[error("io: {0}")]
@@ -140,8 +134,6 @@ pub enum IndexError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SearchError {
-    #[error("witchcraft binding not yet wired up; enable feature `witchcraft-backend` and complete the upstream integration")]
-    BackendNotImplemented,
     #[error("upstream witchcraft error: {0}")]
     Upstream(String),
 }
@@ -153,8 +145,5 @@ pub use indexer::Indexer;
 pub use searcher::{Searcher, K_MIN, K_MULTIPLIER};
 pub use snippet::render as render_snippet;
 
-#[cfg(all(
-    feature = "witchcraft-backend",
-    any(target_os = "linux", target_os = "macos")
-))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use witchcraft_handle::WitchcraftIndexer;
