@@ -1,0 +1,57 @@
+name: "Build Linux packages"
+description: "Build scryd .deb/.rpm/.apk/.pkg.tar.zst packages from release binaries using nfpm."
+
+inputs:
+  arch:
+    description: "nfpm architecture: amd64 or arm64."
+    required: true
+  target:
+    description: "Rust target triple the release binaries were built for."
+    required: true
+  version:
+    description: "Package version (semver). Defaults to the pushed v* tag, else the Cargo.toml version."
+    required: false
+    default: ""
+  outdir:
+    description: "Directory to write the packages into."
+    required: false
+    default: "dist/packages"
+  formats:
+    description: "Space-separated nfpm packagers to build."
+    required: false
+    default: "deb rpm apk archlinux"
+  nfpm-version:
+    description: "nfpm release to install."
+    required: false
+    default: "2.46.3"
+
+runs:
+  using: composite
+  steps:
+    - name: install nfpm
+      shell: bash
+      run: |
+        set -euo pipefail
+        ver="${{ inputs.nfpm-version }}"
+        case "$(uname -m)" in
+          x86_64)  nfpm_arch=x86_64 ;;
+          aarch64) nfpm_arch=arm64 ;;
+          *) echo "unsupported runner arch: $(uname -m)" >&2; exit 1 ;;
+        esac
+        tmp="$(mktemp -d)"
+        url="https://github.com/goreleaser/nfpm/releases/download/v${ver}/nfpm_${ver}_Linux_${nfpm_arch}.tar.gz"
+        curl -fsSL -o "$tmp/nfpm.tar.gz" "$url"
+        tar -xzf "$tmp/nfpm.tar.gz" -C "$tmp" nfpm
+        sudo install -m 0755 "$tmp/nfpm" /usr/local/bin/nfpm
+        rm -rf "$tmp"
+        nfpm --version
+
+    - name: build packages
+      shell: bash
+      run: bash scripts/build-packages.sh
+      env:
+        ARCH: ${{ inputs.arch }}
+        TARGET: ${{ inputs.target }}
+        VERSION: ${{ inputs.version }}
+        OUTDIR: ${{ inputs.outdir }}
+        FORMATS: ${{ inputs.formats }}

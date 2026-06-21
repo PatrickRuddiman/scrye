@@ -1,0 +1,68 @@
+# nfpm configuration for scryd's native Linux packages.
+#
+# One config produces every format scryd ships to a package manager:
+#   deb        -> Debian, Ubuntu, Mint, Pop!_OS, ... (apt/dpkg)
+#   rpm        -> Fedora, RHEL, Rocky, Alma, openSUSE (dnf/yum/zypper)
+#   apk        -> Alpine (apk)            [needs gcompat; see README.install.md]
+#   archlinux  -> Arch, Manjaro, Endeavour (pacman)
+#
+# Driven by scripts/build-packages.sh, which exports PKG_ARCH / PKG_VERSION and
+# stages the binaries + rendered unit under dist/stage/ before running
+# `nfpm package` once per packager. nfpm expands ${VAR} from the environment in
+# scalar fields (name/arch/version/...), but NOT in `contents.src` globs — so the
+# staged paths below are literal and the script always stages into dist/stage/.
+#
+# Docs: https://nfpm.goreleaser.com
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+name: scryd
+arch: ${PKG_ARCH}
+platform: linux
+version: ${PKG_VERSION}
+section: utils
+priority: optional
+maintainer: "Patrick Ruddiman <PatrickRuddiman@users.noreply.github.com>"
+vendor: "scryd"
+homepage: "https://github.com/PatrickRuddiman/scrye"
+license: "Apache-2.0"
+description: |
+  IMAP indexer and MCP search daemon.
+  scryd fetches the IMAP mailbox named by USER_EMAIL, indexes it with
+  witchcraft, and serves read-only search to local MCP clients over a
+  loopback-only TCP listener (default 127.0.0.1:7878). It is a single-purpose
+  system daemon with no CLI client.
+
+# Built against glibc (>= 2.34) — the same floor as the release tarballs. On a
+# stock musl Alpine the .apk additionally needs the `gcompat` package.
+
+contents:
+  - src: dist/stage/scryd
+    dst: /usr/bin/scryd
+    file_info:
+      mode: 0755
+  - src: dist/stage/scryd-fetch-weights
+    dst: /usr/bin/scryd-fetch-weights
+    file_info:
+      mode: 0755
+  # Vendor unit location (packages own /usr/lib/systemd/system; /etc is for the
+  # local admin's overrides). Rendered from ops/scryd.service.in with ExecStart
+  # pointed at /usr/bin/scryd.
+  - src: dist/stage/scryd.service
+    dst: /usr/lib/systemd/system/scryd.service
+    file_info:
+      mode: 0644
+  - src: ./LICENSE
+    dst: /usr/share/doc/scryd/LICENSE
+    file_info:
+      mode: 0644
+  - src: ./ops/README.install.md
+    dst: /usr/share/doc/scryd/README.install.md
+    file_info:
+      mode: 0644
+
+# These run under each packager's maintainer-script environment. The scripts are
+# POSIX sh and tool-agnostic so the same three files work on dpkg, rpm, apk and
+# pacman. See ops/nfpm/scripts/.
+scripts:
+  postinstall: ./ops/nfpm/scripts/postinstall.sh
+  preremove: ./ops/nfpm/scripts/preremove.sh
+  postremove: ./ops/nfpm/scripts/postremove.sh

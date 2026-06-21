@@ -116,3 +116,16 @@ jobs:
           bash tests/e2e_imap_to_search.sh
         shell: bash
 
+      - name: build linux packages (deb/rpm/apk/archlinux)
+        uses: ./.github/actions/build-linux-packages
+        with:
+          arch: amd64
+          target: x86_64-unknown-linux-gnu
+
+      - name: upload packages artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scryd-packages-x86_64
+          path: dist/packages/*
+          if-no-files-found: error
+

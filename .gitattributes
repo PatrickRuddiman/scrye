@@ -1,0 +1,3 @@
+# Shell scripts must stay LF — they run on Linux as CI steps and as package
+# maintainer scripts (deb/rpm/apk/pacman), where a CR would break the shebang.
+*.sh text eol=lf
