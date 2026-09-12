@@ -29,9 +29,11 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             arch: x86_64
+            nfpm_arch: amd64
             cross: false
           - target: aarch64-unknown-linux-gnu
             arch: aarch64
+            nfpm_arch: arm64
             cross: true
     services:
       greenmail:
@@ -158,6 +160,12 @@ jobs:
           echo "sha256_file=${out}.sha256" >> "$GITHUB_OUTPUT"
         shell: bash
 
+      - name: build linux packages (deb/rpm/apk/archlinux)
+        uses: ./.github/actions/build-linux-packages
+        with:
+          arch: ${{ matrix.nfpm_arch }}
+          target: ${{ matrix.target }}
+
       - name: upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -165,6 +173,7 @@ jobs:
           path: |
             ${{ steps.package.outputs.tarball }}
             ${{ steps.package.outputs.sha256_file }}
+            dist/packages/*
 
   release:
     name: github release
@@ -183,10 +192,19 @@ jobs:
       - name: aggregate artifacts
         run: |
           set -euo pipefail
+          shopt -s nullglob
           mkdir -p release
-          find dist -type f \( -name '*.tar.gz' -o -name '*.sha256' \) -exec cp {} release/ \;
-          (cd release && cat *.sha256 | sort -u > SHA256SUMS && rm -f *.sha256)
-          ls -la release
+          # Collect every release tarball and native package produced by the
+          # build matrix (filenames already encode arch, so no collisions).
+          find dist -type f \( \
+            -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' \
+            -o -name '*.apk' -o -name '*.pkg.tar.zst' \) -exec cp -t release/ {} +
+          cd release
+          files=( *.tar.gz *.deb *.rpm *.apk *.pkg.tar.zst )
+          # One manifest covering tarballs + packages so consumers can verify
+          # any artifact without the GitHub UI.
+          sha256sum -- "${files[@]}" > SHA256SUMS
+          ls -la
 
       - name: create github release
         env:

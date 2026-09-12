@@ -1,3 +1,15 @@
+---
+sources:
+  - crates/scryd-mcp/src/scope.rs
+  - crates/scryd-mcp/src/serve.rs
+  - crates/scryd-mcp/src/tools/read.rs
+  - crates/scryd-config/src/permissions.rs
+  - crates/scryd-config/src/secret.rs
+  - crates/scryd-imap/src/verbs.rs
+  - crates/scryd-imap/src/tls.rs
+  - ops/scryd.service.in
+---
+
 # scryd security posture
 
 scryd is a single-purpose daemon that serves **one mailbox** over a **loopback-only MCP server**. Its security model is intentionally small: bind nothing routable, serve only the mailbox named by `USER_EMAIL`, and keep the IMAP credential readable only by the dedicated `scryd` system user. This document spells out exactly what scryd defends against and what it doesn't.

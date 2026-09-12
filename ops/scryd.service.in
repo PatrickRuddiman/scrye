@@ -31,6 +31,12 @@ Environment=USER_EMAIL=
 # Environment=SCRYD_MCP_BIND=127.0.0.1:7878
 Environment=XDG_CONFIG_HOME=/etc/scryd
 Environment=XDG_DATA_HOME=/var/lib/scryd
+# Path to the weight-fetch helper the daemon runs on first start when the
+# witchcraft assets are missing. It tracks wherever the helper was installed:
+# the tarball installer ships it in /usr/local/bin, and the package build
+# rewrites this line to /usr/bin (where packages install it) with the same sed
+# that retargets ExecStart. Override it if you stage the helper elsewhere.
+Environment=SCRYD_FETCH_WEIGHTS_BIN=/usr/local/bin/scryd-fetch-weights
 
 NoNewPrivileges=yes
 ProtectSystem=strict

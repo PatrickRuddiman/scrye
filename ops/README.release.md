@@ -1,11 +1,15 @@
 # Releasing scryd
 
-Per build-and-packaging slice §3 Decision 10 + §3 Decision 12: scryd ships
-as per-arch tarballs attached to a GitHub Release. There is no Debian /
-RPM / Homebrew / AUR / Nix story in v1; downstream packaging is a v2
-ergonomic.
+Per build-and-packaging slice §3 Decision 10: scryd ships as per-arch tarballs
+attached to a GitHub Release. As a v2 packaging ergonomic (slice §3 Decision 12),
+each release **also** ships native packages for the major Linux package managers
+— `.deb`, `.rpm`, Alpine `.apk`, and Arch `.pkg.tar.zst` — built with
+[nfpm](https://nfpm.goreleaser.com).
 
-The release pipeline lives in `.github/workflows/release.yml`.
+The release pipeline lives in `.github/workflows/release.yml`. Package building
+is factored into the `./.github/actions/build-linux-packages` composite action
+(driven by `scripts/build-packages.sh` + `ops/nfpm/`), and the same action runs
+on every PR in `ci.yml` so packaging breakage is caught before a tag.
 
 ## What gets built
 
@@ -27,8 +31,33 @@ Each tarball contains:
   recipes
 - `LICENSE` — Apache-2.0
 
-A `<tarball>.sha256` sidecar file is uploaded alongside each tarball so
-downstream consumers can verify integrity without needing the GitHub UI.
+A `<tarball>.sha256` sidecar file is produced alongside each tarball, and a
+single `SHA256SUMS` manifest covering every tarball **and** every native package
+is attached to the release so downstream consumers can verify integrity without
+needing the GitHub UI.
+
+### Native packages
+
+For each arch the matrix also builds, via nfpm, one package per supported
+package manager:
+
+| File | Manager | Distros |
+|---|---|---|
+| `scryd_X.Y.Z_amd64.deb` / `_arm64.deb` | apt / dpkg | Debian, Ubuntu, Mint, Pop!_OS |
+| `scryd-X.Y.Z-1.x86_64.rpm` / `.aarch64.rpm` | dnf / yum / zypper | Fedora, RHEL, Rocky, Alma, openSUSE |
+| `scryd_X.Y.Z_x86_64.apk` / `_aarch64.apk` | apk | Alpine |
+| `scryd-X.Y.Z-1-x86_64.pkg.tar.zst` / `-aarch64...` | pacman | Arch, Manjaro, EndeavourOS |
+
+Unlike the tarball (which installs per the bundled `install.sh` under
+`/usr/local`), packages own the system tree: the binaries land in `/usr/bin`,
+the unit in `/usr/lib/systemd/system/scryd.service`, and the maintainer scripts
+in `ops/nfpm/scripts/` create the `scryd` system user, lay out `/etc/scryd` +
+`/var/lib/scryd`, and `daemon-reload`. They deliberately do **not** auto-start
+the service (`USER_EMAIL` is mandatory) and do **not** download weights (the
+daemon self-fetches on first start).
+
+The binaries are glibc builds (the same glibc ≥ 2.34 floor as the tarballs), so
+the `.apk` needs Alpine's `gcompat` to run on stock musl.
 
 Weights are **not** in the tarball (slice §3 Decision 4). They live at
 `$XDG_DATA_HOME/scryd/assets/xtr-weights.gguf` and are fetched on first
@@ -83,6 +112,15 @@ cargo deny check                           # cargo install --locked cargo-deny
 ```
 
 If all four exit 0, the workflow will too.
+
+To also build the native packages locally (needs `nfpm` on `PATH` and a release
+build for the target):
+
+```sh
+cargo build --release --target x86_64-unknown-linux-gnu -p scryd -p scryd-fetch-weights
+ARCH=amd64 TARGET=x86_64-unknown-linux-gnu bash scripts/build-packages.sh
+# packages land in dist/packages/
+```
 
 ## Provenance + supply-chain
 
